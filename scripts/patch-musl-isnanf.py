@@ -163,7 +163,8 @@ def fetch(url: str) -> str:
 
 def inject_fts(root: str, include_dir: str = None):
     """注入 musl-fts：下载 fts.c/fts.h → src/libtools/，改 CMakeLists 编译 fts.c。
-    fts.h 也复制到 include_dir（CMake 不搜索 src/libtools，#include <fts.h> 用尖括号）。"""
+    fts.h 也复制到 include_dir（CMake 不搜索 src/libtools，#include <fts.h> 用尖括号）。
+    设置环境变量 SKIP_FTS=1 可跳过网络下载（本地无网验证时用）。"""
     libtools = os.path.join(root, "src", "libtools")
     if include_dir:
         os.makedirs(include_dir, exist_ok=True)
@@ -171,6 +172,9 @@ def inject_fts(root: str, include_dir: str = None):
         dst = os.path.join(libtools, name)
         if os.path.exists(dst):
             print(f"跳过 {name}（已存在）")
+        elif os.environ.get("SKIP_FTS"):
+            print(f"跳过 {name}（SKIP_FTS=1，本地无网）")
+            continue
         else:
             content = fetch(FTS_URL.format(name))
             with open(dst, "w", encoding="utf-8") as f:
@@ -251,10 +255,66 @@ def write_stub_headers(include_dir: str):
         print(f"写入 {mmap_h}")
 
 
+# ---- obstack 移植（glibc 专属，musl 无）----
+
+# 本文件同目录的 obstack/ 下放着移植好的 obstack.h 与 obstack_glibc.c
+OBSTACK_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "obstack")
+
+
+def inject_obstack(root: str, include_dir: str = None):
+    """注入 glibc obstack 移植实现：
+    1. obstack.h → include_dir（供 #include <obstack.h>）
+    2. obstack_glibc.c → src/libtools/（不覆盖 box64 自带的 wrapper obstack.c，
+       该 wrapper 内部调用我们提供的 _obstack_* 符号）
+    3. CMakeLists 追加 obstack_glibc.c 编译源
+    """
+    if include_dir:
+        os.makedirs(include_dir, exist_ok=True)
+        dst_h = os.path.join(include_dir, "obstack.h")
+        src_h = os.path.join(OBSTACK_DIR, "obstack.h")
+        if not os.path.exists(dst_h):
+            with open(src_h, "r", encoding="utf-8") as f:
+                content = f.read()
+            with open(dst_h, "w", encoding="utf-8") as f:
+                f.write(content)
+            print(f"写入 {dst_h}")
+        else:
+            print(f"跳过 obstack.h（已存在）")
+
+    libtools = os.path.join(root, "src", "libtools")
+    dst_c = os.path.join(libtools, "obstack_glibc.c")
+    src_c = os.path.join(OBSTACK_DIR, "obstack_glibc.c")
+    if not os.path.exists(dst_c):
+        with open(src_c, "r", encoding="utf-8") as f:
+            content = f.read()
+        with open(dst_c, "w", encoding="utf-8") as f:
+            f.write(content)
+        print(f"写入 {dst_c}")
+    else:
+        print(f"跳过 obstack_glibc.c（已存在）")
+
+    cmake = os.path.join(root, "CMakeLists.txt")
+    with open(cmake, "r", encoding="utf-8") as f:
+        s = f.read()
+    src_entry = '"${BOX64_ROOT}/src/libtools/obstack_glibc.c"'
+    if src_entry not in s:
+        # 锚点：主 ELFLOADER_SRC 无条件列表（auxval.c 后），
+        # 这样 Android 与 Linux 都能编译，为 myalign32.c（BOX32 必编）提供 _obstack_* 符号
+        anchor = '"${BOX64_ROOT}/src/libtools/auxval.c"'
+        assert anchor in s, f"CMakeLists.txt 找不到锚点 {anchor}"
+        s = s.replace(anchor, anchor + "\n    " + src_entry, 1)
+        with open(cmake, "w", encoding="utf-8") as f:
+            f.write(s)
+        print("CMakeLists.txt: 已把 obstack_glibc.c 加入无条件 ELFLOADER_SRC")
+    else:
+        print("CMakeLists.txt: obstack_glibc.c 已在编译源列表")
+
+
 root = sys.argv[1]
 include_dir = sys.argv[2] if len(sys.argv) > 2 else None
 
 inject_fts(root, include_dir)
+inject_obstack(root, include_dir)
 if include_dir:
     write_stub_headers(include_dir)
 
