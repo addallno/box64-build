@@ -167,6 +167,59 @@ SIGNAL32_GLIBC = "    __SI_SIGFAULT_ADDL\n"
 SIGNAL32_FIELD_SRC = "src->_sifields"
 SIGNAL32_FIELD_OFFSETOF = "offsetof(siginfo_t, _sifields)"
 
+# ---- threads32.c 专项：与 threads.c 相同思路，但缩进为空格、类型名 iFLi_t ----
+
+# 1) cleanup 声明冲突（musl pthread.h 已用 struct __ptcb* 声明，注释掉；空格版）
+THREADS32_CLEANUP_DECL = """void _pthread_cleanup_push(void* buffer, void* routine, void* arg); // declare hidden functions
+void _pthread_cleanup_pop(void* buffer, int exec);"""
+THREADS32_CLEANUP_PATCH = """// musl 的 <pthread.h> 已声明 _pthread_cleanup_push/pop（struct __ptcb* 签名），
+// box64 用 void* 声明与之冲突，注释掉（musl 下由头文件提供）"""
+# 2) iFLi_t：musl pthread_t 是指针，unsigned long 改为 void*
+THREADS32_IFLI = "typedef int  (*iFLi_t)(unsigned long, int);"
+THREADS32_IFLI_PATCH = "typedef int  (*iFLi_t)(void*, int);"
+
+# 3) dlvsym（glibc 专属，musl 无）→ 直接 pthread_kill（空格缩进版）
+THREADS32_DLVSYM_BLOCK = """    // search for older symbol for pthread_kill
+    {
+        char buff[50];
+        for(int i=0; i<34 && !real_phtread_kill_old; ++i) {
+            snprintf(buff, 50, "GLIBC_2.%d", i);
+            real_phtread_kill_old = (iFLi_t)dlvsym(NULL, "pthread_kill", buff);
+        }
+    }"""
+THREADS32_DLVSYM_PATCH = """    // musl 无版本符号机制，直接使用当前 pthread_kill
+    real_phtread_kill_old = (iFLi_t)pthread_kill;"""
+
+# 4) pthread_getattr_np：musl 声明签名 (pthread_t, pthread_attr_t*)，th 是 uintptr_t 需 cast
+THREADS32_GETATTR = "    int ret = pthread_getattr_np(th, get_attr(attr));"
+THREADS32_GETATTR_PATCH = "    int ret = pthread_getattr_np((pthread_t)th, get_attr(attr));"
+
+# 5) struct __pthread_mutex_s（glibc 专属类型）→ 读第一个 int（glibc 的 __kind 与
+#    musl 的 type 都是首个 int，等价）
+THREADS32_MUTEX = 'fake->i386__kind = ((struct __pthread_mutex_s*)from_ptrv(fake->real_mutex))->__kind;'
+THREADS32_MUTEX_PATCH = 'fake->i386__kind = *((int*)from_ptrv(fake->real_mutex));'
+
+
+def patch_threads32_c(s: str):
+    """threads32.c 的 musl 适配（与 threads.c 同一套问题，缩进/类型名不同）。"""
+    count = 0
+    for old, new in (
+        (THREADS32_CLEANUP_DECL, THREADS32_CLEANUP_PATCH),
+        (THREADS32_IFLI, THREADS32_IFLI_PATCH),
+        (THREADS32_DLVSYM_BLOCK, THREADS32_DLVSYM_PATCH),
+        (THREADS32_GETATTR, THREADS32_GETATTR_PATCH),
+        (THREADS32_MUTEX, THREADS32_MUTEX_PATCH),
+    ):
+        if old in s:
+            s = s.replace(old, new, 1)
+            count += 1
+        else:
+            print(f"警告: threads32.c 未找到片段: {old.splitlines()[0][:60]}")
+    if THREADS_STUB_PATCH not in s and THREADS_STUB_ANCHOR in s:
+        s = s.replace(THREADS_STUB_ANCHOR, THREADS_STUB_PATCH, 1)
+        count += 1
+    return s, count
+
 
 def patch_signal32_c(s: str):
     """signal32.c：适配 musl 的 siginfo_t（__si_fields union，无 __SI_SIGFAULT_ADDL 宏）。"""
@@ -368,6 +421,9 @@ for dirpath, _dirs, files in os.walk(os.path.join(root, "src")):
             n += m
         if fn == "threads.c":
             new, m = patch_threads_c(new)
+            n += m
+        if fn == "threads32.c":
+            new, m = patch_threads32_c(new)
             n += m
         if n:
             with open(path, "w", encoding="utf-8") as f:
