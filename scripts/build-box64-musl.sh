@@ -28,6 +28,7 @@ cd box64
 mkdir build && cd build
 cmake .. \
   -DCMAKE_C_COMPILER=$CROSS_CC \
+  -DCMAKE_C_FLAGS="-D_DEFAULT_SOURCE -std=gnu11" \
   -DARM_DYNAREC=ON \
   -DBOX32=ON \
   -DSTATICBUILD=ON \
