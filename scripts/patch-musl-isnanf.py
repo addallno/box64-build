@@ -8,6 +8,9 @@ REPL = {  # 优先匹配更长的 f 变体
     # musl 的 off_t 恒为 64 位，fseeko/ftello 本身就是 64 位，等价替换
     "fseeko64(": "fseeko(",
     "ftello64(": "ftello(",
+    # glibc 专属的 64 位类型别名，musl 用 ino_t/off_t（本就 64 位），语义等价
+    "ino64_t": "ino_t",
+    "off64_t": "off_t",
 }
 
 # musl 无 glibc 的 mallopt/M_ARENA_*，从 os_linux.c 移除该调优块
