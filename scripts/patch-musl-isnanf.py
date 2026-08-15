@@ -158,6 +158,31 @@ def remove_mallopt_block(s: str):
     return "\n".join(out), removed
 
 
+# ---- signal32.c 专项：glibc 专属 siginfo_t 字段名（musl 用 __si_fields）----
+# glibc:  union _sifields;  __SI_SIGFAULT_ADDL 宏（aarch64 为空）
+# musl:   union __si_fields;  无 __SI_SIGFAULT_ADDL 宏
+# signal32.c 自定义镜像结构 my_siginfo32_s 内的 _sifields 成员保留，
+# 只有访问宿主 siginfo_t 的成员名需要改成 musl 的名字。
+SIGNAL32_GLIBC = "    __SI_SIGFAULT_ADDL\n"
+SIGNAL32_FIELD_SRC = "src->_sifields"
+SIGNAL32_FIELD_OFFSETOF = "offsetof(siginfo_t, _sifields)"
+
+
+def patch_signal32_c(s: str):
+    """signal32.c：适配 musl 的 siginfo_t（__si_fields union，无 __SI_SIGFAULT_ADDL 宏）。"""
+    count = 0
+    if SIGNAL32_GLIBC in s:
+        s = s.replace(SIGNAL32_GLIBC, "", 1)
+        count += 1
+    if SIGNAL32_FIELD_SRC in s:
+        s = s.replace(SIGNAL32_FIELD_SRC, "src->__si_fields", 1)
+        count += 1
+    if SIGNAL32_FIELD_OFFSETOF in s:
+        s = s.replace(SIGNAL32_FIELD_OFFSETOF, "offsetof(siginfo_t, __si_fields)", 1)
+        count += 1
+    return s, count
+
+
 def fetch(url: str) -> str:
     print(f"下载 {url}")
     with urllib.request.urlopen(url, timeout=30) as r:
@@ -337,6 +362,9 @@ for dirpath, _dirs, files in os.walk(os.path.join(root, "src")):
             n += m
         if fn == "mysignal.h":
             new, m = patch_mysignal_h(new)
+            n += m
+        if fn == "signal32.c":
+            new, m = patch_signal32_c(new)
             n += m
         if fn == "threads.c":
             new, m = patch_threads_c(new)
