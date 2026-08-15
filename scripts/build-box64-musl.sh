@@ -48,9 +48,12 @@ EOF
 echo "==> cmake 交叉编译"
 cd box64
 mkdir build && cd build
+# musl 无 PTHREAD_ERRORCHECK/RECURSIVE_MUTEX_INITIALIZER 静态宏，按 musl mutex 结构体布局注入：
+# pthread_mutex_t = { union { int __i[10]; } __u; }，_m_type=__u.__i[0]（0=NORMAL 1=RECURSIVE 2=ERRORCHECK）
+MUTEX_MACROS='-DPTHREAD_ERRORCHECK_MUTEX_INITIALIZER={{{2}}} -DPTHREAD_RECURSIVE_MUTEX_INITIALIZER={{{1}}}'
 cmake .. \
   -DCMAKE_C_COMPILER=$CROSS_CC \
-  -DCMAKE_C_FLAGS="-D_GNU_SOURCE -D_DEFAULT_SOURCE -I$WORK/include" \
+  -DCMAKE_C_FLAGS="-D_GNU_SOURCE -D_DEFAULT_SOURCE -I$WORK/include $MUTEX_MACROS" \
   -DARM_DYNAREC=ON \
   -DBOX32=ON \
   -DSTATICBUILD=ON \
