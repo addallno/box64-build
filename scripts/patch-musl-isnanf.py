@@ -75,6 +75,71 @@ def patch_mysignal_h(s: str):
     return s, 0
 
 
+# ---- threads.c 专项：musl 缺失的 glibc 线程接口 ----
+
+# 1) _pthread_cleanup_push/pop 声明：musl 头已声明（struct __ptcb* 签名），注释掉 box64 的 void* 重复声明
+THREADS_CLEANUP_DECL = """void _pthread_cleanup_push(void* buffer, void* routine, void* arg);	// declare hidden functions
+void _pthread_cleanup_pop(void* buffer, int exec);"""
+THREADS_CLEANUP_PATCH = """// musl 的 <pthread.h> 已声明 _pthread_cleanup_push/pop（struct __ptcb* 签名），
+// box64 用 void* 声明与之冲突，注释掉（musl 下由头文件提供）"""
+
+# 2) mmap64/MAP_32BIT：musl 无（mmap 本就是 64 位）
+THREADS_MMAP = "mmap64(NULL, stacksize, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_32BIT, -1, 0)"
+THREADS_MMAP_PATCH = "mmap(NULL, stacksize, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0)"
+
+# 3) iFli_t 用 unsigned long 接收 pthread_t 指针 → musl 下 pthread_t 是指针，改 void*
+THREADS_IFLI = "typedef int (*iFli_t)(long unsigned int, int);"
+THREADS_IFLI_PATCH = "typedef int (*iFli_t)(void*, int);"
+
+# 4) dlvsym（glibc 专属，musl 无）→ 直接用当前 pthread_kill
+THREADS_DLVSYM_BLOCK = """	// search for older symbol for pthread_kill
+	{
+		char buff[50];
+		for(int i=0; i<34 && !real_phtread_kill_old; ++i) {
+			snprintf(buff, 50, "GLIBC_2.%d", i);
+			real_phtread_kill_old = (iFli_t)dlvsym(NULL, "pthread_kill", buff);
+		}
+	}
+	if(!real_phtread_kill_old)
+		real_phtread_kill_old = (iFli_t)dlvsym(NULL, "pthread_kill", "GLIBC_2.2.5");
+	if(!real_phtread_kill_old) {
+		printf_log(LOG_INFO, "Warning, older then 2.34 pthread_kill not found, using current one\\n");
+		real_phtread_kill_old = (iFli_t)pthread_kill;
+	}"""
+THREADS_DLVSYM_PATCH = """	// musl 无版本符号机制，直接使用当前 pthread_kill
+	real_phtread_kill_old = (iFli_t)pthread_kill;"""
+
+# 5) pthread_attr_*affinity_np：musl 无属性级版本，注入 stub 定义到 threads.c 顶部
+THREADS_STUB_ANCHOR = "typedef struct threadstack_s {"
+THREADS_STUB_PATCH = """// musl 无 pthread_attr_*affinity_np（glibc 专属），stub 返回 ENOSYS
+int pthread_attr_getaffinity_np(const pthread_attr_t* attr, size_t cpusize, void* cpuset)
+{ (void)attr; (void)cpusize; (void)cpuset; errno = ENOSYS; return -1; }
+int pthread_attr_setaffinity_np(pthread_attr_t* attr, size_t cpusize, void* cpuset)
+{ (void)attr; (void)cpusize; (void)cpuset; errno = ENOSYS; return -1; }
+
+typedef struct threadstack_s {"""
+
+
+def patch_threads_c(s: str):
+    """threads.c 的 musl 适配：cleanup 声明/mmap64/类型/dlvsym/attr affinity stub。"""
+    count = 0
+    for old, new in (
+        (THREADS_CLEANUP_DECL, THREADS_CLEANUP_PATCH),
+        (THREADS_MMAP, THREADS_MMAP_PATCH),
+        (THREADS_IFLI, THREADS_IFLI_PATCH),
+        (THREADS_DLVSYM_BLOCK, THREADS_DLVSYM_PATCH),
+    ):
+        if old in s:
+            s = s.replace(old, new, 1)
+            count += 1
+        else:
+            print(f"警告: threads.c 未找到片段: {old.splitlines()[0][:60]}")
+    if THREADS_STUB_PATCH not in s and THREADS_STUB_ANCHOR in s:
+        s = s.replace(THREADS_STUB_ANCHOR, THREADS_STUB_PATCH, 1)
+        count += 1
+    return s, count
+
+
 def remove_mallopt_block(s: str):
     """仅注释 os_linux.c 的 mallopt 相关行（musl 无此 glibc 接口），不触碰 #ifndef/#endif。"""
     lines = s.split("\n")
@@ -196,6 +261,9 @@ for dirpath, _dirs, files in os.walk(os.path.join(root, "src")):
             n += m
         if fn == "mysignal.h":
             new, m = patch_mysignal_h(new)
+            n += m
+        if fn == "threads.c":
+            new, m = patch_threads_c(new)
             n += m
         if n:
             with open(path, "w", encoding="utf-8") as f:
