@@ -5,6 +5,9 @@ C99 的 isnan(x)/isinf(x) 宏按 sizeof 自动适配 float/double/long double，
 REPL = {  # 优先匹配更长的 f 变体
     "isnanf(": "isnan(",
     "isinff(": "isinf(",
+    # musl 的 off_t 恒为 64 位，fseeko/ftello 本身就是 64 位，等价替换
+    "fseeko64(": "fseeko(",
+    "ftello64(": "ftello(",
 }
 
 # musl 无 glibc 的 mallopt/M_ARENA_*，从 os_linux.c 移除该调优块
