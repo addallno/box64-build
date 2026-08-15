@@ -28,6 +28,9 @@ REPL = {  # 优先匹配更长的 f 变体
     "off64_t": "off_t",
     # glibc 内部类型别名，musl 用同名公共类型（布局一致）
     "__sigset_t": "sigset_t",
+    # glibc 的 _NP 命名空间宏，musl 提供同义无后缀版本
+    "PTHREAD_ERRORCHECK_MUTEX_INITIALIZER_NP": "PTHREAD_ERRORCHECK_MUTEX_INITIALIZER",
+    "PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP": "PTHREAD_RECURSIVE_MUTEX_INITIALIZER",
 }
 
 # musl 无 glibc 的 mallopt/M_ARENA_*，从 os_linux.c 注释该调优块
