@@ -26,10 +26,25 @@ REPL = {  # 优先匹配更长的 f 变体
     # glibc 专属的 64 位类型别名，musl 用 ino_t/off_t（本就 64 位），语义等价
     "ino64_t": "ino_t",
     "off64_t": "off_t",
+    # glibc 内部类型别名，musl 用同名公共类型（布局一致）
+    "__sigset_t": "sigset_t",
 }
 
 # musl 无 glibc 的 mallopt/M_ARENA_*，从 os_linux.c 注释该调优块
 MALLOPT_MARKER = "// setting 32bits malloc options"
+
+# mysignal.h：非 Windows 分支缺 __sigset_t typedef（musl 中它只是结构体标签）
+SIGSET_TYPEDEF_ANCHOR = "#include <signal.h>"
+SIGSET_TYPEDEF_PATCH = """#include <signal.h>
+typedef sigset_t __sigset_t;"""
+
+# musl 无 glibc 的 __uid_t/__gid_t/__pid_t/__sighandler_t 内部别名
+UNDERSCORE_TYPES = {
+    "__uid_t": "uid_t",
+    "__gid_t": "gid_t",
+    "__pid_t": "pid_t",
+    "__sighandler_t": "sighandler_t",
+}
 
 # musl-fts 上游（void-linux 维护的 FreeBSD 派生 fts，纯 POSIX）
 FTS_URL = "https://raw.githubusercontent.com/void-linux/musl-fts/master/{}"
@@ -40,8 +55,20 @@ CMAKE_FTS_ANCHOR = '"${BOX64_ROOT}/src/libtools/auxval.c"'
 
 def patch_text(s: str):
     """按 dict 键长降序替换（正则整词边界），避免 isnanf 被 isnan 前缀干扰。"""
-    pattern = re.compile(r"\b(" + "|".join(re.escape(k) for k in REPL) + r")")
-    return pattern.sub(lambda m: REPL[m.group(1)], s)
+    all_repl = dict(REPL)
+    all_repl.update(UNDERSCORE_TYPES)
+    pattern = re.compile(r"\b(" + "|".join(re.escape(k) for k in all_repl) + r")")
+    return pattern.sub(lambda m: all_repl[m.group(1)], s)
+
+
+def patch_mysignal_h(s: str):
+    """mysignal.h：非 Windows 分支补 __sigset_t typedef（musl 中它只是结构体标签）。"""
+    if SIGSET_TYPEDEF_PATCH in s:
+        return s, 0
+    if SIGSET_TYPEDEF_ANCHOR in s:
+        s = s.replace(SIGSET_TYPEDEF_ANCHOR, SIGSET_TYPEDEF_PATCH, 1)
+        return s, 1
+    return s, 0
 
 
 def remove_mallopt_block(s: str):
@@ -159,8 +186,12 @@ for dirpath, _dirs, files in os.walk(os.path.join(root, "src")):
             s = f.read()
         new = patch_text(s)
         n = sum(s.count(k) for k in REPL)
+        n += sum(s.count(k) for k in UNDERSCORE_TYPES)
         if fn == "os_linux.c":
             new, m = remove_mallopt_block(new)
+            n += m
+        if fn == "mysignal.h":
+            new, m = patch_mysignal_h(new)
             n += m
         if n:
             with open(path, "w", encoding="utf-8") as f:
