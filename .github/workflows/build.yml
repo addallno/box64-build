@@ -1,0 +1,20 @@
+name: build-box64
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 交叉编译 box64 (aarch64 musl 静态, BOX32)
+        run: bash scripts/build-box64-musl.sh
+
+      - name: 上传静态产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: box64-aarch64-musl
+          path: /tmp/box64-aarch64-musl
+          if-no-files-found: error
