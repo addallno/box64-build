@@ -48,6 +48,9 @@ UNDERSCORE_TYPES = {
     "__gid_t": "gid_t",
     "__pid_t": "pid_t",
     "__sighandler_t": "sighandler_t",
+    # glibc 专属 64 位 statfs 类型（musl 的 fsblkcnt_t/fsfilcnt_t 本就 64 位）
+    "__fsblkcnt64_t": "fsblkcnt_t",
+    "__fsfilcnt64_t": "fsfilcnt_t",
 }
 
 # musl-fts 上游（void-linux 维护的 FreeBSD 派生 fts，纯 POSIX）
