@@ -26,6 +26,23 @@ git clone --depth 1 https://github.com/ptitSeb/box64.git
 echo "==> 打 musl 补丁（isnanf -> isnan）"
 python3 $GITHUB_WORKSPACE/scripts/patch-musl-isnanf.py $WORK/box64
 
+echo "==> 提供 execinfo.h stub（musl 无此头，但 libc 含 backtrace 实现）"
+cat > $TOOLCHAIN/$MUSL_ARCH/sysroot/usr/include/execinfo.h <<'EOF'
+#ifndef _EXECINFO_H
+#define _EXECINFO_H
+#include <stddef.h>
+#ifdef __cplusplus
+extern "C" {
+#endif
+int backtrace(void**, int);
+char** backtrace_symbols(void* const*, int);
+void backtrace_symbols_fd(void* const*, int, int);
+#ifdef __cplusplus
+}
+#endif
+#endif
+EOF
+
 echo "==> cmake 交叉编译"
 cd box64
 mkdir build && cd build
