@@ -27,7 +27,8 @@ echo "==> 打 musl 补丁（isnanf -> isnan）"
 python3 $GITHUB_WORKSPACE/scripts/patch-musl-isnanf.py $WORK/box64
 
 echo "==> 提供 execinfo.h stub（musl 无此头，但 libc 含 backtrace 实现）"
-cat > $TOOLCHAIN/$MUSL_ARCH/sysroot/usr/include/execinfo.h <<'EOF'
+mkdir -p $WORK/include
+cat > $WORK/include/execinfo.h <<'EOF'
 #ifndef _EXECINFO_H
 #define _EXECINFO_H
 #include <stddef.h>
@@ -48,7 +49,7 @@ cd box64
 mkdir build && cd build
 cmake .. \
   -DCMAKE_C_COMPILER=$CROSS_CC \
-  -DCMAKE_C_FLAGS="-D_GNU_SOURCE -D_DEFAULT_SOURCE" \
+  -DCMAKE_C_FLAGS="-D_GNU_SOURCE -D_DEFAULT_SOURCE -I$WORK/include" \
   -DARM_DYNAREC=ON \
   -DBOX32=ON \
   -DSTATICBUILD=ON \
