@@ -83,10 +83,8 @@ void _pthread_cleanup_pop(void* buffer, int exec);"""
 THREADS_CLEANUP_PATCH = """// musl 的 <pthread.h> 已声明 _pthread_cleanup_push/pop（struct __ptcb* 签名），
 // box64 用 void* 声明与之冲突，注释掉（musl 下由头文件提供）"""
 
-# 2) mmap64/MAP_32BIT：musl 无（mmap 本就是 64 位）
-THREADS_MMAP = "mmap64(NULL, stacksize, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_32BIT, -1, 0)"
-THREADS_MMAP_PATCH = "mmap(NULL, stacksize, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0)"
-
+# 2) mmap64：box64 自己在 custommmap.c 定义了 mmap64（mmap 是其 alias），
+#    只需 musl 无的声明。threads.c 无需改（box64 的 mmap64 签名已够用）
 # 3) iFli_t 用 unsigned long 接收 pthread_t 指针 → musl 下 pthread_t 是指针，改 void*
 THREADS_IFLI = "typedef int (*iFli_t)(long unsigned int, int);"
 THREADS_IFLI_PATCH = "typedef int (*iFli_t)(void*, int);"
@@ -125,7 +123,6 @@ def patch_threads_c(s: str):
     count = 0
     for old, new in (
         (THREADS_CLEANUP_DECL, THREADS_CLEANUP_PATCH),
-        (THREADS_MMAP, THREADS_MMAP_PATCH),
         (THREADS_IFLI, THREADS_IFLI_PATCH),
         (THREADS_DLVSYM_BLOCK, THREADS_DLVSYM_PATCH),
     ):
@@ -236,6 +233,22 @@ def write_stub_headers(include_dir: str):
                 "/* 其余 HAVE_* 均不定义（musl 无对应 glibc 特性） */\n"
             )
         print(f"写入 {config_h}")
+
+    # musl 的 <sys/mman.h> 无 mmap64 声明，但 box64 在 custommmap.c 定义了 mmap64
+    # （mmap 是其 alias）。musl 下调用处无法看到声明 → 补声明。
+    mmap_h = os.path.join(include_dir, "mmap64.h")
+    if not os.path.exists(mmap_h):
+        with open(mmap_h, "w", encoding="utf-8") as f:
+            f.write(
+                "#ifndef _MMAP64_H_\n"
+                "#define _MMAP64_H_\n"
+                "/* musl 无 mmap64 声明（box64 在 custommmap.c 定义，mmap 是其 alias） */\n"
+                "#include <sys/mman.h>\n"
+                "#include <sys/types.h>\n"
+                "void* mmap64(void* addr, unsigned long length, int prot, int flags, int fd, ssize_t offset);\n"
+                "#endif /* _MMAP64_H_ */\n"
+            )
+        print(f"写入 {mmap_h}")
 
 
 root = sys.argv[1]
