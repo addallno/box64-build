@@ -236,6 +236,47 @@ def patch_signal32_c(s: str):
     return s, count
 
 
+# libc_net32.c：musl 无 getprotobyname_r/getprotobynumber_r，宿主 __res_state 用 qhook/rhook
+NET32_GETPROTONAME_R = "    int r = getprotobyname_r(name, &ret_l, buff, buflen, &result_l);"
+NET32_GETPROTONAME_R_PATCH = (
+    "    int r = -1;\n"
+    "    struct protoent* tmp_pe = getprotobyname(name);\n"
+    "    if(tmp_pe) { ret_l = *tmp_pe; result_l = &ret_l; r = 0; }"
+)
+NET32_GETPROTONUMBER_R = "    int r = getprotobynumber_r(proto, &ret_l, buff, buflen, &result_l);"
+NET32_GETPROTONUMBER_R_PATCH = (
+    "    int r = -1;\n"
+    "    struct protoent* tmp_pe = getprotobynumber(proto);\n"
+    "    if(tmp_pe) { ret_l = *tmp_pe; result_l = &ret_l; r = 0; }"
+)
+NET32_QHOOK_32 = "to_ptrv(src->__glibc_unused_qhook)"  # 573
+NET32_RHOOK_32 = "to_ptrv(src->__glibc_unused_rhook)"  # 574
+NET32_RHOOK_64 = "from_ptrv(src->__glibc_unused_rhook)"  # 593
+NET32_QHOOK_64 = "from_ptrv(src->__glibc_unused_qhook)"  # 594
+
+
+def patch_libc_net32_c(s: str):
+    """libc_net32.c：musl 无 getprotobyname_r/getprotobynumber_r（改非 _r 模拟）；
+    宿主 struct __res_state 无 __glibc_unused_qhook/rhook（musl 用 qhook/rhook）。"""
+    count = 0
+    if NET32_GETPROTONAME_R in s:
+        s = s.replace(NET32_GETPROTONAME_R, NET32_GETPROTONAME_R_PATCH, 1)
+        count += 1
+    if NET32_GETPROTONUMBER_R in s:
+        s = s.replace(NET32_GETPROTONUMBER_R, NET32_GETPROTONUMBER_R_PATCH, 1)
+        count += 1
+    for src_frag, dst_frag in (
+        (NET32_QHOOK_32, "to_ptrv(src->qhook)"),
+        (NET32_RHOOK_32, "to_ptrv(src->rhook)"),
+        (NET32_RHOOK_64, "from_ptrv(src->rhook)"),
+        (NET32_QHOOK_64, "from_ptrv(src->qhook)"),
+    ):
+        if src_frag in s:
+            s = s.replace(src_frag, dst_frag, 1)
+            count += 1
+    return s, count
+
+
 def fetch(url: str) -> str:
     print(f"下载 {url}")
     with urllib.request.urlopen(url, timeout=30) as r:
@@ -391,6 +432,31 @@ def inject_obstack(root: str, include_dir: str = None):
         print("CMakeLists.txt: obstack_glibc.c 已在编译源列表")
 
 
+def inject_glibc_headers(include_dir: str):
+    """把 scripts/glibc-hdr/ 下 glibc 专属 stub 头复制到 include_dir，
+    使 static_libc.h 的 #include 编译通过（box64 不实际使用这些头里的类型）。"""
+    if not include_dir:
+        return
+    hdr_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "glibc-hdr")
+    if not os.path.isdir(hdr_dir):
+        print(f"跳过 glibc-hdr（不存在: {hdr_dir}）")
+        return
+    for dirpath, _dirs, files in os.walk(hdr_dir):
+        rel = os.path.relpath(dirpath, hdr_dir)
+        dst_dir = os.path.join(include_dir, rel) if rel != "." else include_dir
+        os.makedirs(dst_dir, exist_ok=True)
+        for f in files:
+            src = os.path.join(dirpath, f)
+            dst = os.path.join(dst_dir, f)
+            if not os.path.exists(dst):
+                with open(src, "r", encoding="utf-8") as fi:
+                    with open(dst, "w", encoding="utf-8") as fo:
+                        fo.write(fi.read())
+                print(f"写入 stub 头 {dst}")
+            else:
+                print(f"跳过 {dst}（已存在）")
+
+
 root = sys.argv[1]
 include_dir = sys.argv[2] if len(sys.argv) > 2 else None
 
@@ -398,6 +464,7 @@ inject_fts(root, include_dir)
 inject_obstack(root, include_dir)
 if include_dir:
     write_stub_headers(include_dir)
+    inject_glibc_headers(include_dir)
 
 total = 0
 for dirpath, _dirs, files in os.walk(os.path.join(root, "src")):
@@ -424,6 +491,9 @@ for dirpath, _dirs, files in os.walk(os.path.join(root, "src")):
             n += m
         if fn == "threads32.c":
             new, m = patch_threads32_c(new)
+            n += m
+        if fn == "libc_net32.c":
+            new, m = patch_libc_net32_c(new)
             n += m
         if n:
             with open(path, "w", encoding="utf-8") as f:
