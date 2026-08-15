@@ -23,8 +23,9 @@ cd $WORK
 rm -rf box64
 git clone --depth 1 https://github.com/ptitSeb/box64.git
 
-echo "==> 打 musl 补丁（isnanf -> isnan）"
-python3 $GITHUB_WORKSPACE/scripts/patch-musl-isnanf.py $WORK/box64
+echo "==> 打 musl 补丁（isnanf -> isnan / fts 注入 / stub 头）"
+mkdir -p $WORK/include
+python3 $GITHUB_WORKSPACE/scripts/patch-musl-isnanf.py $WORK/box64 $WORK/include
 
 echo "==> 提供 execinfo.h stub（musl 无此头，但 libc 含 backtrace 实现）"
 mkdir -p $WORK/include
