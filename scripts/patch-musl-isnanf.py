@@ -18,21 +18,21 @@ def patch_text(s: str):
 
 
 def remove_mallopt_block(s: str):
-    """移除 os_linux.c 中被 #ifndef ANDROID 包裹的 mallopt 调用块。"""
-    marker = s.find(MALLOPT_MARKER)
-    if marker == -1:
-        return s
-    start = s.rfind("    ", 0, marker)
-    if start == -1:
-        start = marker
-    # 找到后续第一个 '}\n' 结尾（该 block 是 4 空格缩进的 mallopt 三连）
-    end = marker
-    for _ in range(6):
-        nl = s.find("\n", end)
-        if nl == -1:
-            break
-        end = nl + 1
-    return s[:start] + s[end:]
+    """仅注释 os_linux.c 的 mallopt 相关行（musl 无此 glibc 接口），不触碰 #ifndef/#endif 结构。"""
+    lines = s.split("\n")
+    out = []
+    removed = 0
+    for line in lines:
+        if MALLOPT_MARKER in line:
+            removed += 1
+            out.append("    // " + line + " (musl 无此 glibc 接口, patch)")
+            continue
+        if "mallopt(" in line:
+            removed += 1
+            out.append("    // " + line)
+            continue
+        out.append(line)
+    return "\n".join(out), removed
 import os
 import re
 import sys
@@ -47,11 +47,10 @@ for dirpath, _dirs, files in os.walk(os.path.join(root, "src")):
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             s = f.read()
         new = patch_text(s)
-        if fn == "os_linux.c":
-            new = remove_mallopt_block(new)
         n = sum(s.count(k) for k in REPL)
-        if MALLOPT_MARKER in s:
-            n += 1
+        if fn == "os_linux.c":
+            new, m = remove_mallopt_block(new)
+            n += m
         if n:
             with open(path, "w", encoding="utf-8") as f:
                 f.write(new)
