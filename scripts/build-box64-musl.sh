@@ -23,6 +23,9 @@ cd $WORK
 rm -rf box64
 git clone --depth 1 https://github.com/ptitSeb/box64.git
 
+echo "==> 打 musl 补丁（isnanf -> isnan）"
+python3 $GITHUB_WORKSPACE/scripts/patch-musl-isnanf.py $WORK/box64
+
 echo "==> cmake 交叉编译"
 cd box64
 mkdir build && cd build
