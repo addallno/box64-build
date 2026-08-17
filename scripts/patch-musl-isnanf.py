@@ -375,6 +375,8 @@ def write_stub_headers(include_dir: str):
                 "#include <sys/mman.h>\n"
                 "#include <sys/types.h>\n"
                 "void* mmap64(void* addr, unsigned long length, int prot, int flags, int fd, ssize_t offset);\n"
+                "/* musl 无 glibc 的 __compar_d_fn_t（qsort_r 回调类型），补齐以便 wrappedlibc.c 编译 */\n"
+                "typedef int (*__compar_d_fn_t)(const void*, const void*, void*);\n"
                 "#endif /* _MMAP64_H_ */\n"
             )
         print(f"写入 {mmap_h}")
@@ -385,6 +387,66 @@ def write_stub_headers(include_dir: str):
 # 本文件同目录的 obstack/ 下放着移植好的 obstack.h 与 obstack_glibc.c
 OBSTACK_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "obstack")
 ERROR_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "error")
+
+
+def patch_wrappedlibc_c(s: str):
+    """wrappedlibc.c 的 musl 适配：
+    - musl 无 struct stat64 / stat64 等（off_t 恒 64 位，struct stat 即 64 位布局），
+      glibc 的 __xstat/__fxstat 族内部用 stat64 获取 64 位信息再 Unalign 到 x86 布局。
+      musl 下直接用 struct stat / stat / fstat / lstat / fstatat（等价）。
+    - qsort_r 的 __compar_d_fn_t 已由 mmap64.h（-include）提供 typedef。
+    只改函数体内部，保留 EXPORT my___*stat64(...) 的 alias 声明。
+    """
+    pairs = [
+        ("    struct stat64 st;\n", "    struct stat st;\n"),
+        ("    struct  stat64 st;\n", "    struct stat st;\n"),
+        ("    int r = fstat64(fd, buf?&st:buf);\n", "    int r = fstat(fd, buf?&st:buf);\n"),
+        ("    int r = stat64((const char*)path, buf?&st:buf);\n", "    int r = stat((const char*)path, buf?&st:buf);\n"),
+        ("    int r = lstat64((const char*)name, buf?&st:buf);\n", "    int r = lstat((const char*)name, buf?&st:buf);\n"),
+        ("    int r = fstatat64(d, path, &st, flags);\n", "    int r = fstatat(d, path, &st, flags);\n"),
+    ]
+    count = 0
+    for old, new in pairs:
+        if old in s:
+            # struct stat64 st 声明出现多次（各 *_stat 函数体），替换目标相同→全部替换
+            # 函数调用行必须唯一（防串改到 alias 声明）
+            if old.startswith("    struct"):
+                s = s.replace(old, new)
+                count += 1
+            else:
+                assert s.count(old) == 1, f"wrappedlibc.c 替换片段不唯一: {old!r}"
+                s = s.replace(old, new, 1)
+                count += 1
+    return s, count
+
+
+def patch_wrapped32_libc_c(s: str):
+    """wrapped32/wrappedlibc.c 的 musl 适配：
+    x86 32 位程序的 stat 系统调用。宿主侧用 struct stat（musl 等价于 glibc struct stat64），
+    经 FillStatFromStat64 转 i386_stat 布局。字段名不变。
+    """
+    pairs = [
+        ("const struct stat64 *st64", "const struct stat *st64"),
+        ("    struct stat64 s = {0};\n", "    struct stat s = {0};\n"),
+        ("    struct stat64 st;\n", "    struct stat st;\n"),
+        ("    int ret = fstatat64(fd, name, buff?&s:NULL, flags);\n",
+         "    int ret = fstatat(fd, name, buff?&s:NULL, flags);\n"),
+        ("    int ret = stat64(f, r?&s:NULL);\n", "    int ret = stat(f, r?&s:NULL);\n"),
+        ("    int ret = lstat64(f, r?&s:NULL);\n", "    int ret = lstat(f, r?&s:NULL);\n"),
+        ("    int ret = fstat64(fd, r?&s:NULL);\n", "    int ret = fstat(fd, r?&s:NULL);\n"),
+        ("    int r = stat64(path, &st);\n", "    int r = stat(path, &st);\n"),
+        ("    int r = fstat64(fd, &st);\n", "    int r = fstat(fd, &st);\n"),
+        ("    int r = lstat64(path, &st);\n", "    int r = lstat(path, &st);\n"),
+        ("    int r = stat64((const char*)path, &st);\n", "    int r = stat((const char*)path, &st);\n"),
+        ("    int r = lstat64((const char*)name, &st);\n", "    int r = lstat((const char*)name, &st);\n"),
+        ("    int r = fstatat64(d, path, &st, flags);\n", "    int r = fstatat(d, path, &st, flags);\n"),
+    ]
+    count = 0
+    for old, new in pairs:
+        if old in s:
+            s = s.replace(old, new)
+            count += 1
+    return s, count
 
 
 def inject_obstack(root: str, include_dir: str = None):
@@ -543,6 +605,12 @@ for dirpath, _dirs, files in os.walk(os.path.join(root, "src")):
             n += m
         if fn == "libc_net32.c":
             new, m = patch_libc_net32_c(new)
+            n += m
+        if fn == "wrappedlibc.c":
+            if "wrapped32" in path:
+                new, m = patch_wrapped32_libc_c(new)
+            else:
+                new, m = patch_wrappedlibc_c(new)
             n += m
         if n:
             with open(path, "w", encoding="utf-8") as f:
