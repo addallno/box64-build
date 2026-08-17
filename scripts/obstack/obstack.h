@@ -73,6 +73,9 @@ extern void (*obstack_alloc_failed_handler) (void);
 
 extern int obstack_exit_failure;
 
+#include <stdarg.h>
+extern int obstack_vprintf (struct obstack *, const char *, va_list);
+
 #define obstack_base(h) ((void *) (h)->object_base)
 #define obstack_chunk_size(h) ((h)->chunk_size)
 #define obstack_next_free(h)    ((h)->next_free)
