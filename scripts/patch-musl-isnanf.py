@@ -374,9 +374,23 @@ def write_stub_headers(include_dir: str):
                 "/* musl 无 mmap64 声明（box64 在 custommmap.c 定义，mmap 是其 alias） */\n"
                 "#include <sys/mman.h>\n"
                 "#include <sys/types.h>\n"
+                "#include <dirent.h>\n"
                 "void* mmap64(void* addr, unsigned long length, int prot, int flags, int fd, ssize_t offset);\n"
                 "/* musl 无 glibc 的 __compar_d_fn_t（qsort_r 回调类型），补齐以便 wrappedlibc.c 编译 */\n"
                 "typedef int (*__compar_d_fn_t)(const void*, const void*, void*);\n"
+                "/* musl 不 export __ctype_*_loc 到 <ctype.h>，但 libc 有符号，补声明 */\n"
+                "const unsigned short** __ctype_b_loc(void);\n"
+                "const int** __ctype_toupper_loc(void);\n"
+                "const int** __ctype_tolower_loc(void);\n"
+                "/* musl 无 glibc 的 struct mallinfo（box64 只用它 memset，不需字段对齐语义） */\n"
+                "struct mallinfo {\n"
+                "  int arena; int ordblks; int smblks; int hblks; int hblkhd;\n"
+                "  int usmblks; int fsmblks; int uordblks; int fordblks; int keepcost;\n"
+                "};\n"
+                "/* musl 无 scandirat（box64 的 my_scandirat 需要），补声明（实现注入 scandirat.c） */\n"
+                "int scandirat(int dirfd, const char *path, struct dirent ***res,\n"
+                "              int (*sel)(const struct dirent *),\n"
+                "              int (*cmp)(const struct dirent **, const struct dirent **));\n"
                 "#endif /* _MMAP64_H_ */\n"
             )
         print(f"写入 {mmap_h}")
@@ -387,6 +401,7 @@ def write_stub_headers(include_dir: str):
 # 本文件同目录的 obstack/ 下放着移植好的 obstack.h 与 obstack_glibc.c
 OBSTACK_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "obstack")
 ERROR_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "error")
+SCANDIRAT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scandirat")
 
 
 def patch_wrappedlibc_c(s: str):
@@ -417,6 +432,40 @@ def patch_wrappedlibc_c(s: str):
                 assert s.count(old) == 1, f"wrappedlibc.c 替换片段不唯一: {old!r}"
                 s = s.replace(old, new, 1)
                 count += 1
+
+    # musl 无 *64 变体（off_t 恒 64 位），纯去掉 64 后缀即可。
+    # 调用点在 my_open64/my_fopen64/my_glob64/my_scandir64 等函数体内，可多处出现→全部替换。
+    for old, new in (
+        ("return open64(", "return open("),
+        ("return fopen64(", "return fopen("),
+        ("return glob64(", "return glob("),
+        ("return scandir64(", "return scandir("),
+        ("return scandirat64(", "return scandirat("),
+        ("return ftw64(", "return ftw("),
+        ("return nftw64(", "return nftw("),
+    ):
+        if old in s:
+            s = s.replace(old, new)
+            count += 1
+
+    # musl 无 getrlimit64（getrlimit 即 64 位版本），struct rlimit64 → struct rlimit
+    if "struct rlimit64* rlim" in s:
+        assert s.count("struct rlimit64* rlim") == 1
+        s = s.replace("struct rlimit64* rlim", "struct rlimit* rlim", 1)
+        count += 1
+    if "getrlimit64(resource, rlim)" in s:
+        assert s.count("getrlimit64(resource, rlim)") == 1
+        s = s.replace("getrlimit64(resource, rlim)", "getrlimit(resource, rlim)", 1)
+        count += 1
+
+    # musl 的 pthread_mutex_t 无 __data.__owner（glibc 专属）；
+    # getGlibcCachedTid 里改用 GetTID()（musl 无 glibc tid 缓存机制，直接取真实 tid，
+    # 使 updateGlibcTidCache 中 cached==real 恒成立而跳过写缓存）。
+    if "pid_t tid = lock.__data.__owner;" in s:
+        assert s.count("pid_t tid = lock.__data.__owner;") == 1
+        s = s.replace("pid_t tid = lock.__data.__owner;", "pid_t tid = GetTID();", 1)
+        count += 1
+
     return s, count
 
 
@@ -567,12 +616,43 @@ def inject_error(root: str, include_dir: str = None):
         print("CMakeLists.txt: 已把 error_glibc.c 加入无条件 ELFLOADER_SRC")
 
 
+def inject_scandirat(root: str):
+    """注入 scandirat 实现（musl 无此函数）：
+    1. scandirat.c → src/libtools/
+    2. CMakeLists 追加 scandirat_glibc.c 编译源
+    """
+    libtools = os.path.join(root, "src", "libtools")
+    dst_c = os.path.join(libtools, "scandirat_glibc.c")
+    src_c = os.path.join(SCANDIRAT_DIR, "scandirat.c")
+    if not os.path.exists(dst_c):
+        with open(src_c, "r", encoding="utf-8") as f:
+            content = f.read()
+        with open(dst_c, "w", encoding="utf-8") as f:
+            f.write(content)
+        print(f"写入 {dst_c}")
+    else:
+        print("跳过 scandirat_glibc.c（已存在）")
+
+    cmake = os.path.join(root, "CMakeLists.txt")
+    with open(cmake, "r", encoding="utf-8") as f:
+        s = f.read()
+    src_entry = '"${BOX64_ROOT}/src/libtools/scandirat_glibc.c"'
+    if src_entry not in s:
+        anchor = '"${BOX64_ROOT}/src/libtools/error_glibc.c"'
+        assert anchor in s, f"CMakeLists.txt 找不到锚点 {anchor}"
+        s = s.replace(anchor, anchor + "\n    " + src_entry, 1)
+        with open(cmake, "w", encoding="utf-8") as f:
+            f.write(s)
+        print("CMakeLists.txt: 已把 scandirat_glibc.c 加入无条件 ELFLOADER_SRC")
+
+
 root = sys.argv[1]
 include_dir = sys.argv[2] if len(sys.argv) > 2 else None
 
 inject_fts(root, include_dir)
 inject_obstack(root, include_dir)
 inject_error(root, include_dir)
+inject_scandirat(root)
 if include_dir:
     write_stub_headers(include_dir)
     inject_glibc_headers(include_dir)
