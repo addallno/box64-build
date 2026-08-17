@@ -384,6 +384,7 @@ def write_stub_headers(include_dir: str):
 
 # 本文件同目录的 obstack/ 下放着移植好的 obstack.h 与 obstack_glibc.c
 OBSTACK_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "obstack")
+ERROR_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "error")
 
 
 def inject_obstack(root: str, include_dir: str = None):
@@ -460,11 +461,56 @@ def inject_glibc_headers(include_dir: str):
                 print(f"跳过 {dst}（已存在）")
 
 
+def inject_error(root: str, include_dir: str = None):
+    """注入 glibc error()/error_at_line() 移植实现：
+    1. error.h → include_dir（供 #include <error.h>）
+    2. error.c → src/libtools/
+    3. CMakeLists 追加 error.c 编译源
+    """
+    if include_dir:
+        os.makedirs(include_dir, exist_ok=True)
+        dst_h = os.path.join(include_dir, "error.h")
+        src_h = os.path.join(ERROR_DIR, "error.h")
+        if not os.path.exists(dst_h):
+            with open(src_h, "r", encoding="utf-8") as f:
+                content = f.read()
+            with open(dst_h, "w", encoding="utf-8") as f:
+                f.write(content)
+            print(f"写入 {dst_h}")
+        else:
+            print("跳过 error.h（已存在）")
+
+    libtools = os.path.join(root, "src", "libtools")
+    dst_c = os.path.join(libtools, "error_glibc.c")
+    src_c = os.path.join(ERROR_DIR, "error.c")
+    if not os.path.exists(dst_c):
+        with open(src_c, "r", encoding="utf-8") as f:
+            content = f.read()
+        with open(dst_c, "w", encoding="utf-8") as f:
+            f.write(content)
+        print(f"写入 {dst_c}")
+    else:
+        print("跳过 error_glibc.c（已存在）")
+
+    cmake = os.path.join(root, "CMakeLists.txt")
+    with open(cmake, "r", encoding="utf-8") as f:
+        s = f.read()
+    src_entry = '"${BOX64_ROOT}/src/libtools/error_glibc.c"'
+    if src_entry not in s:
+        anchor = '"${BOX64_ROOT}/src/libtools/obstack_glibc.c"'
+        assert anchor in s, f"CMakeLists.txt 找不到锚点 {anchor}"
+        s = s.replace(anchor, anchor + "\n    " + src_entry, 1)
+        with open(cmake, "w", encoding="utf-8") as f:
+            f.write(s)
+        print("CMakeLists.txt: 已把 error_glibc.c 加入无条件 ELFLOADER_SRC")
+
+
 root = sys.argv[1]
 include_dir = sys.argv[2] if len(sys.argv) > 2 else None
 
 inject_fts(root, include_dir)
 inject_obstack(root, include_dir)
+inject_error(root, include_dir)
 if include_dir:
     write_stub_headers(include_dir)
     inject_glibc_headers(include_dir)
