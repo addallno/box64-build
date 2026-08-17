@@ -16,6 +16,7 @@ import os
 import re
 import sys
 import urllib.request
+import subprocess
 
 REPL = {  # 优先匹配更长的 f 变体
     "isnanf(": "isnan(",
@@ -646,6 +647,35 @@ def inject_scandirat(root: str):
         print("CMakeLists.txt: 已把 scandirat_glibc.c 加入无条件 ELFLOADER_SRC")
 
 
+def inject_missing_symbols(root: str):
+    """为 STATICBUILD 下 musl 缺失的 glibc 符号生成 weak stub：
+    解析 src/wrapped/wrappedlibc_private.h 的全部宏条目，收集需 & 地址的符号
+    （GO/GOW/GOD/GOWD/GO2/GOW2 的 N/O 与 DATA/DATAV/DATAB 的 N），
+    生成 src/libtools/glibc_missing_symbols.c（__attribute__((weak)) 定义）。
+    weak 定义在静态链接时：musl libc 有同名强符号则被覆盖（安全），
+    缺失的则提供地址，保证 symbolmap 的 &N/&O 编译链接通过。
+    """
+    priv = os.path.join(root, "src", "wrapped", "wrappedlibc_private.h")
+    assert os.path.exists(priv), f"找不到 {priv}"
+    libtools = os.path.join(root, "src", "libtools")
+    dst_c = os.path.join(libtools, "glibc_missing_symbols.c")
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gen_missing_symbols.py")
+    subprocess.run([sys.executable, script, priv, dst_c], check=True)
+    print(f"写入 {dst_c}")
+
+    cmake = os.path.join(root, "CMakeLists.txt")
+    with open(cmake, "r", encoding="utf-8") as f:
+        s = f.read()
+    src_entry = '"${BOX64_ROOT}/src/libtools/glibc_missing_symbols.c"'
+    if src_entry not in s:
+        anchor = '"${BOX64_ROOT}/src/libtools/scandirat_glibc.c"'
+        assert anchor in s, f"CMakeLists.txt 找不到锚点 {anchor}"
+        s = s.replace(anchor, anchor + "\n    " + src_entry, 1)
+        with open(cmake, "w", encoding="utf-8") as f:
+            f.write(s)
+        print("CMakeLists.txt: 已把 glibc_missing_symbols.c 加入无条件 ELFLOADER_SRC")
+
+
 root = sys.argv[1]
 include_dir = sys.argv[2] if len(sys.argv) > 2 else None
 
@@ -653,6 +683,7 @@ inject_fts(root, include_dir)
 inject_obstack(root, include_dir)
 inject_error(root, include_dir)
 inject_scandirat(root)
+inject_missing_symbols(root)
 if include_dir:
     write_stub_headers(include_dir)
     inject_glibc_headers(include_dir)
