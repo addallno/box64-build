@@ -249,15 +249,17 @@ NET32_GETPROTONUMBER_R_PATCH = (
     "    struct protoent* tmp_pe = getprotobynumber(proto);\n"
     "    if(tmp_pe) { ret_l = *tmp_pe; result_l = &ret_l; r = 0; }"
 )
-NET32_QHOOK_32 = "to_ptrv(src->__glibc_unused_qhook)"  # 573
+NET32_QHOOK_32 = "to_ptrv(src->__glibc_unused_qhook)"  # 573: dst=镜像, src=宿主 → src 改 qhook
 NET32_RHOOK_32 = "to_ptrv(src->__glibc_unused_rhook)"  # 574
-NET32_RHOOK_64 = "from_ptrv(src->__glibc_unused_rhook)"  # 593
-NET32_QHOOK_64 = "from_ptrv(src->__glibc_unused_qhook)"  # 594
+NET32_RHOOK_64 = "dst->__glibc_unused_rhook = from_ptrv(src->__glibc_unused_rhook);"  # 593 整行唯一
+NET32_QHOOK_64 = "dst->__glibc_unused_qhook = from_ptrv(src->__glibc_unused_qhook);"  # 594 整行唯一
 
 
 def patch_libc_net32_c(s: str):
     """libc_net32.c：musl 无 getprotobyname_r/getprotobynumber_r（改非 _r 模拟）；
-    宿主 struct __res_state 无 __glibc_unused_qhook/rhook（musl 用 qhook/rhook）。"""
+    宿主 struct __res_state 无 __glibc_unused_qhook/rhook（musl 用 qhook/rhook）。
+    注意：convert_res_state_to_32 里 src=宿主(dst=镜像)，convert_res_state_to_64 里
+    dst=宿主(src=镜像)，两者各只改宿主侧字段，镜像字段名 __glibc_unused_* 保留。"""
     count = 0
     if NET32_GETPROTONAME_R in s:
         s = s.replace(NET32_GETPROTONAME_R, NET32_GETPROTONAME_R_PATCH, 1)
@@ -268,10 +270,11 @@ def patch_libc_net32_c(s: str):
     for src_frag, dst_frag in (
         (NET32_QHOOK_32, "to_ptrv(src->qhook)"),
         (NET32_RHOOK_32, "to_ptrv(src->rhook)"),
-        (NET32_RHOOK_64, "from_ptrv(src->rhook)"),
-        (NET32_QHOOK_64, "from_ptrv(src->qhook)"),
+        (NET32_RHOOK_64, "dst->rhook = from_ptrv(src->__glibc_unused_rhook);"),
+        (NET32_QHOOK_64, "dst->qhook = from_ptrv(src->__glibc_unused_qhook);"),
     ):
         if src_frag in s:
+            assert s.count(src_frag) == 1, f"libc_net32.c 替换片段不唯一: {src_frag!r}"
             s = s.replace(src_frag, dst_frag, 1)
             count += 1
     return s, count
