@@ -502,7 +502,11 @@ _HEADER_DECL = """\
 #ifndef _GLIBC_MISSING_SYMBOLS_H
 #define _GLIBC_MISSING_SYMBOLS_H
 
-#include <wchar.h>
+/* mbstate_t 最小兼容定义（与 musl <wchar.h> 布局完全一致） */
+/* 若 <wchar.h> 已被包含则跳过，否则提供类型使 static_libc.h 签名可编译 */
+#ifndef _WCHAR_H
+typedef struct { union { int __wch; char __wchb[4]; } __value; } mbstate_t;
+#endif
 
 /* glibc 专有类型别名（musl 无这些 typedef） */
 typedef uid_t __uid_t;
@@ -521,13 +525,12 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
 
     三路过滤策略（最小化与 musl/box64 头文件的类型冲突）:
       1. decls 中的符号 → 跳过（musl 头文件已有函数/类型声明）
-      2. macros 中的符号 → 仅 #undef（musl 以宏形式提供，undef 后
-         编译器用隐式声明处理 &N，需 -Wno-implicit-function-declaration）
-      3. nm_syms 中的符号 → 跳过（musl libc.a 有定义，链接器能找到）
-      4. 完全缺失的符号 → extern 声明（从 sigs 获取正确签名，
+      2. macros 中的符号 → #undef 后 fallthrough 到声明（宏被替换为 extern
+         声明，-Wno-implicit-function-declaration 允许隐式取地址）
+      3. 完全缺失的符号 → extern 声明（从 sigs 获取正确签名，
          否则回退 void(void)）
 
-    数据同理：跳过 header_syms、_MUSL_KNOWN_DATA、nm_syms 中的数据符号。
+    数据同理：跳过 header_syms、_MUSL_KNOWN_DATA 中的数据符号。
     """
     lines = [_HEADER_DECL]
     undefs = _render_undefs(smart)
@@ -538,10 +541,12 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
     header_syms = musl_header_syms or set()
     decls = musl_header_decls or set()
     macros = musl_macros or set()
-    nm_syms = musl_syms or set()
+
+    # 过滤 dummy_* 假符号（wrappedlibc_private.h 中的特殊条目，非真实 C 函数）
+    func_refs = {n for n in func_refs if not n.startswith("dummy_")}
 
     print(f"[header] 输入: func_refs={len(func_refs)}, decls={len(decls)}, "
-          f"macros={len(macros)}, nm_syms={len(nm_syms)}")
+          f"macros={len(macros)}")
 
     lines.append("/* ================= 函数声明 ================= */")
     declared = 0
@@ -550,33 +555,34 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
         # 第一路：musl 头文件已有函数/类型声明 → 跳过
         if name in decls:
             continue
-        # 第二路：musl 以宏形式提供 → 仅 #undef，不声明
-        # （宏被 undef 后，编译器可能用隐式声明处理 &N，-Wno-implicit-function-declaration 允许）
+        # 第二路：musl 以宏形式提供 → #undef 后 fallthrough 到声明
+        # （宏被替换后，extern 声明提供正确类型）
         if name in macros:
             lines.append(f"#ifdef {name}")
             lines.append(f"#undef {name}")
             lines.append(f"#endif")
             undefed += 1
-            continue
-        # 第三路：musl libc.a 中有定义（nm 找到）→ 跳过
-        # （链接器能找到符号，编译器可能用隐式声明）
-        if name in nm_syms:
-            continue
-        # 第四路：musl 完全缺失的符号 → extern 声明
+        # 第三路：完全缺失的符号 → extern 声明
         if name in sigs:
             ret, params = sigs[name]
-            lines.append(f"extern {ret} {name}({params});")
+            # 跳过签名引用 mbstate_t 但 mbstate_t 尚未定义的符号
+            # （<wchar.h> 未被包含时 mbstate_t 可能不存在）
+            if "mbstate_t" in params:
+                lines.append(f"extern void {name}(void);")
+            else:
+                lines.append(f"extern {ret} {name}({params});")
         else:
             lines.append(f"extern void {name}(void);")
         declared += 1
     print(f"[header] 函数: undef={undefed}, 声明={declared}, "
-          f"跳过(decls/nm_syms)={len(func_refs)-undefed-declared}")
+          f"跳过(decls)={len(func_refs)-undefed-declared}")
 
     lines.append("")
     lines.append("/* ================= 数据声明 ================= */")
     # musl 头文件中已声明的全局数据符号（即使提取失败也要跳过）
     _MUSL_KNOWN_DATA = {
         "daylight", "timezone", "tzname",
+        "__daylight", "__timezone", "__tzname",
         "optarg", "opterr", "optind", "optopt",
         "stdin", "stdout", "stderr",
         "environ", "errno",
@@ -592,9 +598,6 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
             continue
         # 已知的 musl 声明数据符号 → 跳过
         if name in _MUSL_KNOWN_DATA:
-            continue
-        # nm 中有定义的数据符号 → 跳过（避免与已有声明冲突）
-        if name in nm_syms:
             continue
         lines.append(f"extern unsigned char {name}[{data_refs[name][0]}];")
 
