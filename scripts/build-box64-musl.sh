@@ -150,7 +150,6 @@ cat > /tmp/all_musl_headers.c << 'CEOF'
 #include <langinfo.h>
 #include <sys/times.h>
 #include <utime.h>
-#include <fts.h>
 CEOF
 echo "头文件数: $(grep -c '#include' /tmp/all_musl_headers.c)"
 
@@ -166,20 +165,35 @@ cc = '$CROSS_CC'
 flags = ['-D_GNU_SOURCE', '-D_DEFAULT_SOURCE']
 test_file = '/tmp/all_musl_headers.c'
 
-# 第一遍：提取宏定义
-r2 = subprocess.run([cc, '-E', '-dM'] + flags + [test_file],
-                    capture_output=True, text=True)
-macros = set()
-for line in r2.stdout.splitlines():
-    m = re.match(r'^#define\s+(\w+)', line)
-    if m:
-        macros.add(m.group(1))
-if len(macros) == 0:
-    print(f'gcc -E -dM 退出码: {r2.returncode}', file=sys.stderr)
-    print(f'stdout 长度: {len(r2.stdout)}', file=sys.stderr)
-    print(f'stdout 前 500 字符: {r2.stdout[:500]}', file=sys.stderr)
-    print(f'stderr 前 500 字符: {r2.stderr[:500]}', file=sys.stderr)
-print(f'宏定义: {len(macros)}')
+# 第一遍：提取宏定义（自动重试排除缺失头文件）
+excluded_headers = set()
+for attempt in range(20):  # 最多排除 20 个缺失头文件
+    r2 = subprocess.run([cc, '-E', '-dM'] + flags + [test_file],
+                        capture_output=True, text=True)
+    macros = set()
+    for line in r2.stdout.splitlines():
+        m = re.match(r'^#define\s+(\w+)', line)
+        if m:
+            macros.add(m.group(1))
+    if len(macros) > 0:
+        break
+    # 解析 fatal error: xxx.h: No such file or directory
+    missing = re.findall(r'fatal error:\s+([\w./]+\.h):', r2.stderr)
+    if not missing:
+        print(f'gcc -E -dM 失败且无法解析缺失头文件', file=sys.stderr)
+        print(f'stderr: {r2.stderr[:500]}', file=sys.stderr)
+        break
+    for h in missing:
+        if h not in excluded_headers:
+            excluded_headers.add(h)
+            print(f'排除缺失头文件: {h}', file=sys.stderr)
+            # 从测试文件中移除该 include
+            lines = open(test_file).readlines()
+            with open(test_file, 'w') as f:
+                for line in lines:
+                    if f'#include <{h}>' not in line and f'#include <{h}>' not in line:
+                        f.write(line)
+print(f'宏定义: {len(macros)}' + (f'（排除了 {len(excluded_headers)} 个缺失头文件）' if excluded_headers else ''))
 
 # 第二遍：提取函数/类型声明（排除被宏隐藏的函数声明如 iswdigit）
 # 只 undef 与 func_refs 重名的宏（不 undef 编译器/特性宏如 _GNU_SOURCE）
