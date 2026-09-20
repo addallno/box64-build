@@ -527,11 +527,14 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
 
     header_syms = musl_header_syms or set()
     macros = musl_macros or set()
+    # identifiers = 头文件中作为函数/类型/变量声明的符号（不含仅宏定义）
+    # 只对 identifiers 跳过声明；对仅宏符号做 #undef + 声明
+    identifiers = header_syms - macros
 
     lines.append("/* ================= 函数声明 ================= */")
     for name in sorted(func_refs):
-        # 在 musl 头文件中可见且不是宏 → 编译器已知道，跳过
-        if name in header_syms and name not in macros:
+        # 在 musl 头文件中作为函数/类型/变量声明可见 → 编译器已知道，跳过
+        if name in identifiers:
             continue
         # 宏符号：先 undef 防止 GO(N,W) 宏展开时被替换
         if name in macros:

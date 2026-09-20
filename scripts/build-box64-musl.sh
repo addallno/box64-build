@@ -141,6 +141,12 @@ N_HDR=$(wc -l < $MUSL_HEADER_SYMS 2>/dev/null || echo 0)
 N_MAC=$(wc -l < $MUSL_HEADER_MACROS 2>/dev/null || echo 0)
 echo "musl 头文件可见符号: $N_HDR（其中宏: $N_MAC）"
 
+# 补充 mmap64.h（我们的注入头）声明的符号，避免 header 重复声明冲突
+# mmap64.h 声明了 __ctype_b_loc/__ctype_tolower_loc/__ctype_toupper_loc 等
+for sym in __ctype_b_loc __ctype_tolower_loc __ctype_toupper_loc __compar_d_fn_t mmap64; do
+  grep -qxF "$sym" $MUSL_HEADER_SYMS || echo "$sym" >> $MUSL_HEADER_SYMS
+done
+
 export MUSL_HEADER_SYMS_FILE=$MUSL_HEADER_SYMS
 export MUSL_HEADER_MACROS_FILE=$MUSL_HEADER_MACROS
 
