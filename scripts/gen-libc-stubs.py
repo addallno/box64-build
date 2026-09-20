@@ -535,6 +535,10 @@ typedef pid_t __pid_t;
 typedef void (*__sighandler_t)(int);
 #define __sigset_t sigset_t
 
+/* 补充头文件：wrapped*_private.h 引用的符号可能依赖这些头文件的声明 */
+#include <utmp.h>
+#include <utmpx.h>
+
 """
 
 
@@ -725,18 +729,21 @@ def main():
         musl_syms = parse_musl_src(musl_root, args.verbose)
         print(f"[musl] 源码解析符号集: {len(musl_syms)} 个")
 
-    # 2. box64 引用符号（解析 wrappedlibc_private.h + wrappedlibm_private.h）
+    # 2. box64 引用符号（解析所有 wrapped*_private.h）
     func_refs, data_refs = parse_private_refs(priv)
-    # 补充 wrappedlibm_private.h（__finite/__finitef/gamma/gammaf 等数学符号）
-    libm_priv = os.path.join(args.box64_src, "src", "wrapped", "wrappedlibm_private.h")
-    if os.path.isfile(libm_priv):
-        extra_func, extra_data = parse_private_refs(libm_priv)
-        new_funcs = set(extra_func) - set(func_refs)
-        new_data = set(extra_data) - set(data_refs)
-        if new_funcs or new_data:
-            print(f"[box64] wrappedlibm_private.h: +{len(new_funcs)} 函数, +{len(new_data)} 数据")
-        func_refs.update(extra_func)
-        data_refs.update(extra_data)
+    # 扫描 src/wrapped/ 下所有 wrapped*_private.h（补充数学/工具/线程等符号）
+    wrapped_dir = os.path.join(args.box64_src, "src", "wrapped")
+    if os.path.isdir(wrapped_dir):
+        for fn in sorted(os.listdir(wrapped_dir)):
+            if fn.endswith("_private.h") and fn != os.path.basename(priv):
+                p = os.path.join(wrapped_dir, fn)
+                extra_func, extra_data = parse_private_refs(p)
+                new_funcs = set(extra_func) - set(func_refs)
+                new_data = set(extra_data) - set(data_refs)
+                if new_funcs or new_data:
+                    print(f"[box64] {fn}: +{len(new_funcs)} 函数, +{len(new_data)} 数据")
+                func_refs.update(extra_func)
+                data_refs.update(extra_data)
     sigs = parse_static_libc_signatures(slh)
     static_libc_syms = parse_static_libc_symbols(slh)
     if args.verbose:
