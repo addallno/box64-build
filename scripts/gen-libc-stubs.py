@@ -704,21 +704,18 @@ def main():
         musl_syms = parse_musl_src(musl_root, args.verbose)
         print(f"[musl] 源码解析符号集: {len(musl_syms)} 个")
 
-    # 2. box64 引用符号（解析所有 wrapped*_private.h）
+    # 2. box64 引用符号（解析 wrappedlibc_private.h + wrappedlibm_private.h）
     func_refs, data_refs = parse_private_refs(priv)
-    # 扫描所有 wrapped*_private.h，合并符号（glibc_missing_symbols.h 被所有 wrapped*.c 包含）
-    wrapped_dir = os.path.join(args.box64_src, "src", "wrapped")
-    if os.path.isdir(wrapped_dir):
-        for f in sorted(os.listdir(wrapped_dir)):
-            if f.startswith("wrapped") and f.endswith("_private.h") and f != "wrappedlibc_private.h":
-                extra_path = os.path.join(wrapped_dir, f)
-                extra_func, extra_data = parse_private_refs(extra_path)
-                new_funcs = set(extra_func) - set(func_refs)
-                new_data = set(extra_data) - set(data_refs)
-                if new_funcs or new_data:
-                    print(f"[box64] {f}: +{len(new_funcs)} 函数, +{len(new_data)} 数据")
-                func_refs.update(extra_func)
-                data_refs.update(extra_data)
+    # 补充 wrappedlibm_private.h（__finite/__finitef/gamma/gammaf 等数学符号）
+    libm_priv = os.path.join(args.box64_src, "src", "wrapped", "wrappedlibm_private.h")
+    if os.path.isfile(libm_priv):
+        extra_func, extra_data = parse_private_refs(libm_priv)
+        new_funcs = set(extra_func) - set(func_refs)
+        new_data = set(extra_data) - set(data_refs)
+        if new_funcs or new_data:
+            print(f"[box64] wrappedlibm_private.h: +{len(new_funcs)} 函数, +{len(new_data)} 数据")
+        func_refs.update(extra_func)
+        data_refs.update(extra_data)
     sigs = parse_static_libc_signatures(slh)
     static_libc_syms = parse_static_libc_symbols(slh)
     if args.verbose:
