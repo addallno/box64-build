@@ -18,6 +18,13 @@ tar xf musl.tar.xz -C /opt
 CROSS_CC=$TOOLCHAIN/bin/$MUSL_ARCH-gcc
 $CROSS_CC --version
 
+echo "==> 提取 musl 符号列表（用于精确生成缺失符号 stub）"
+MUSL_SYMS=/tmp/musl-syms.txt
+$TOOLCHAIN/bin/$MUSL_ARCH-nm -g --defined-only $TOOLCHAIN/lib/libc.a \
+  | awk '/ [A-Z] /{print $3}' | sort -u > $MUSL_SYMS
+wc -l $MUSL_SYMS
+export MUSL_SYMS_FILE=$MUSL_SYMS
+
 echo "==> 下载 box64 源码"
 cd $WORK
 rm -rf box64

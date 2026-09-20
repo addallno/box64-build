@@ -648,19 +648,29 @@ def inject_scandirat(root: str):
 
 
 def inject_missing_symbols(root: str):
-    """为 STATICBUILD 下 musl 缺失的 glibc 符号生成 weak stub：
-    解析 src/wrapped/wrappedlibc_private.h 的全部宏条目，收集需 & 地址的符号
-    （GO/GOW/GOD/GOWD/GO2/GOW2 的 N/O 与 DATA/DATAV/DATAB 的 N），
-    生成 src/libtools/glibc_missing_symbols.c（__attribute__((weak)) 定义）。
-    weak 定义在静态链接时：musl libc 有同名强符号则被覆盖（安全），
-    缺失的则提供地址，保证 symbolmap 的 &N/&O 编译链接通过。
+    """为 STATICBUILD 下 musl 缺失的 glibc 符号生成 weak stub。
+    优先使用 gen-libc-stubs.py（新版，精确差集：下载 musl 源码或读取 nm 符号文件，
+    只为 musl 真正缺失的符号生成 stub）。若 MUSL_SYMS_FILE 环境变量已指向 nm 符号
+    文件则直接使用；否则回退到旧版 gen_missing_symbols.py（不精确，可能冲突）。
     """
-    priv = os.path.join(root, "src", "wrapped", "wrappedlibc_private.h")
-    assert os.path.exists(priv), f"找不到 {priv}"
     libtools = os.path.join(root, "src", "libtools")
     dst_c = os.path.join(libtools, "glibc_missing_symbols.c")
-    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gen_missing_symbols.py")
-    subprocess.run([sys.executable, script, priv, dst_c], check=True)
+
+    gen_libc_stubs = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gen-libc-stubs.py")
+    musl_syms = os.environ.get("MUSL_SYMS_FILE")
+
+    if os.path.exists(gen_libc_stubs) and musl_syms and os.path.exists(musl_syms):
+        print(f"使用 gen-libc-stubs.py（musl-syms: {musl_syms}）")
+        subprocess.run([sys.executable, gen_libc_stubs,
+                        "--box64-src", root,
+                        "--musl-syms", musl_syms,
+                        "--output", dst_c], check=True)
+    else:
+        priv = os.path.join(root, "src", "wrapped", "wrappedlibc_private.h")
+        assert os.path.exists(priv), f"找不到 {priv}"
+        script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gen_missing_symbols.py")
+        print(f"回退 gen_missing_symbols.py（无 MUSL_SYMS_FILE）")
+        subprocess.run([sys.executable, script, priv, dst_c], check=True)
     print(f"写入 {dst_c}")
 
     cmake = os.path.join(root, "CMakeLists.txt")
