@@ -63,9 +63,9 @@ cat > /tmp/all_musl_headers.c << 'CEOF2'
 CEOF2
 for dir in "" sys netinet net arpa gss complex rpc wchar; do
   if [ -z "$dir" ]; then
-    find "$MUSL_INC" -maxdepth 1 -name '*.h' -type f
-  else
-    find "$MUSL_INC/$dir" -maxdepth 1 -name '*.h' -type f 2>/dev/null
+    find "$MUSL_INC" -maxdepth 1 -name '*.h' -type f 2>/dev/null || true
+  elif [ -d "$MUSL_INC/$dir" ]; then
+    find "$MUSL_INC/$dir" -maxdepth 1 -name '*.h' -type f 2>/dev/null || true
   fi
 done | while read hdr; do
   rel=$(realpath --relative-to="$MUSL_INC" "$hdr")
