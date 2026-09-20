@@ -41,6 +41,30 @@ cd $WORK
 rm -rf box64
 git clone --depth 1 https://github.com/ptitSeb/box64.git
 
+echo "==> 提取 wrappedlibc_private.h 引用符号（供 header 提取时精确定位需 undef 的宏）"
+python3 -c "
+import re, sys
+priv = '$WORK/box64/src/wrapped/wrappedlibc_private.h'
+try:
+    with open(priv) as f:
+        lines = f.readlines()
+except FileNotFoundError:
+    print(f'警告: {priv} 不存在', file=sys.stderr)
+    sys.exit(0)
+func_refs = set()
+for line in lines:
+    # GO(name, ...), GOM(name, ...), GOW(name, ...) 等宏
+    for m in re.finditer(r'GO[NMSPW]*\(\s*(\w+)', line):
+        func_refs.add(m.group(1))
+    # DATA(name, ...)
+    for m in re.finditer(r'DATA\(\s*(\w+)', line):
+        func_refs.add(m.group(1))
+with open('/tmp/func_refs.txt', 'w') as f:
+    for s in sorted(func_refs):
+        f.write(s + '\n')
+print(f'func_refs 符号数: {len(func_refs)}')
+"
+
 echo "==> 提取 musl 头文件可见符号（用于精确区分 header 声明 vs stub 定义）"
 # 手工列表：覆盖所有 POSIX/系统头文件，确保 wrappedlibc_private.h 引用的符号能被正确识别
 # 已知 find 自动发现方案会导致 gcc -E 预处理失败（某些内部头冲突），故用手工列表
@@ -151,12 +175,21 @@ if len(macros) == 0:
     print(f'stderr 前 500 字符: {r2.stderr[:500]}', file=sys.stderr)
 print(f'宏定义: {len(macros)}')
 
-# 生成 #undef 版本的测试文件：先 undef 所有宏，再 include 所有头
-# 这样被宏隐藏的函数声明（如 iswdigit 被 wctype.h 宏隐藏但 wchar.h 有声明）也能被提取
-undefs = ''.join(f'#undef {m}\\n' for m in sorted(macros))
+# 第二遍：提取函数/类型声明（排除被宏隐藏的函数声明如 iswdigit）
+# 只 undef 与 func_refs 重名的宏（不 undef 编译器/特性宏如 _GNU_SOURCE）
+# 否则重包含头文件时 GNU 特有声明（__sigaddset/arc4random 等）会消失
+func_refs_file = '/tmp/func_refs.txt'
+func_refs = set()
+if os.path.isfile(func_refs_file):
+    with open(func_refs_file) as f:
+        func_refs = {line.strip() for line in f if line.strip()}
+# 只 undef 在 func_refs 中出现的宏（这些宏可能隐藏了函数声明）
+target_undefs = [m for m in sorted(macros) if m in func_refs]
+undefs = ''.join(f'#undef {m}\\n' for m in target_undefs)
 with open('/tmp/all_musl_headers_nounDEF.c', 'w') as f:
     f.write(undefs)
     f.write(open(test_file).read())
+print(f'需 undef 的宏: {len(target_undefs)}/{len(macros)}')
 
 r_clean = subprocess.run(
     [cc, '-E'] + flags + ['/tmp/all_musl_headers_nounDEF.c'],
