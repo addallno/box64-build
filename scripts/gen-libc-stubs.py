@@ -594,6 +594,27 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
         "__progname", "__progname_full",
     }
     for name in sorted(func_refs):
+        # 第零路：SMART_MATH 符号（isnan/isinf/finite 等）始终声明，
+        # 因为 wrappedlibm.c 等文件可能不包含 <math.h>，需要这些声明。
+        # 用 #undef + 正确签名（从 smart map 推导）。
+        if name in smart:
+            if name in macros:
+                lines.append(f"#ifdef {name}")
+                lines.append(f"#undef {name}")
+                lines.append("#endif")
+                undefed += 1
+            # 从 smart map 的实现文本提取签名
+            impl = smart[name]
+            # 格式: "int __finite(double x) { return __builtin_isfinite(x); }"
+            sig_match = re.match(r"(\S+(?:\s+\S+)?)\s+(\w+)\s*\(([^)]*)\)", impl)
+            if sig_match:
+                ret_type = sig_match.group(1)
+                params = sig_match.group(3)
+                lines.append(f"extern {ret_type} {name}({params});")
+            else:
+                lines.append(f"extern void {name}(void);")
+            declared += 1
+            continue
         # 第一路：static_libc.h 已声明/定义 → 跳过（避免与其冲突）
         if name in slc_syms:
             skipped_slc += 1
