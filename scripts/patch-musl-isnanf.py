@@ -392,6 +392,13 @@ def write_stub_headers(include_dir: str):
                 "int scandirat(int dirfd, const char *path, struct dirent ***res,\n"
                 "              int (*sel)(const struct dirent *),\n"
                 "              int (*cmp)(const struct dirent **, const struct dirent **));\n"
+                "/* musl 无 dladdr1 等 glibc 扩展 dlfcn 常量 */\n"
+                "#ifndef RTLD_DL_SYMENT\n"
+                "#define RTLD_DL_SYMENT 1\n"
+                "#endif\n"
+                "#ifndef RTLD_DL_LINKMAP\n"
+                "#define RTLD_DL_LINKMAP 2\n"
+                "#endif\n"
                 "#endif /* _MMAP64_H_ */\n"
             )
         print(f"写入 {mmap_h}")
