@@ -627,6 +627,7 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
         "ns_get16", "ns_get32", "ns_initparse", "ns_name_ntop",
         "ns_name_uncompress", "ns_name_unpack", "ns_parserr",
         "ns_put16", "ns_put32", "ns_skiprr",
+        "__res_state",
     }
     for name in sorted(func_refs):
         # 第零路：SMART_MATH 符号（isnan/isinf/finite 等）始终声明，
