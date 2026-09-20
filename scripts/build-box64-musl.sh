@@ -113,10 +113,13 @@ print(f'宏定义: {len(macros)}')
 
 # 生成 #undef 版本的测试文件：先 undef 所有宏，再 include 所有头
 # 这样被宏隐藏的函数声明（如 iswdigit 被 wctype.h 宏隐藏但 wchar.h 有声明）也能被提取
-undefs = ''.join(f'#undef {m}\n' for m in sorted(macros))
+undefs = ''.join(f'#undef {m}\\n' for m in sorted(macros))
+with open('/tmp/all_musl_headers_nounDEF.c', 'w') as f:
+    f.write(undefs)
+    f.write(open(test_file).read())
+
 r_clean = subprocess.run(
-    [cc, '-E'] + flags,
-    input=undefs + open(test_file).read(),
+    [cc, '-E'] + flags + ['/tmp/all_musl_headers_nounDEF.c'],
     capture_output=True, text=True)
 if r_clean.returncode != 0:
     print(f'警告: gcc -E (clean) 失败（退出码 {r_clean.returncode}）', file=sys.stderr)
