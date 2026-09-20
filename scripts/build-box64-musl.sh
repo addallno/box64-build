@@ -42,52 +42,29 @@ rm -rf box64
 git clone --depth 1 https://github.com/ptitSeb/box64.git
 
 echo "==> 提取 musl 头文件可见符号（用于精确区分 header 声明 vs stub 定义）"
-# 预处理所有相关 musl 头文件，提取可见标识符和宏名
-# 用于 gen-libc-stubs.py：header 只声明 musl 头文件中不可见的符号，避免 conflicting types
+# 用 find 自动发现 musl sysroot 下所有头文件（避免手工遗漏）
+MUSL_INC=$(find $TOOLCHAIN -path '*/sysroot/usr/include' -type d 2>/dev/null | head -1)
+if [ -z "$MUSL_INC" ]; then
+  MUSL_INC=$(find $TOOLCHAIN -name 'stdlib.h' -path '*/include/*' -type f 2>/dev/null | head -1 | xargs dirname)
+fi
+echo "musl include 目录: $MUSL_INC"
+
 cat > /tmp/all_musl_headers.c << 'CEOF'
 #define _GNU_SOURCE
 #define _DEFAULT_SOURCE
-#include <stdlib.h>
-#include <string.h>
-#include <stdio.h>
-#include <wchar.h>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <unistd.h>
-#include <dirent.h>
-#include <signal.h>
-#include <time.h>
-#include <locale.h>
-#include <regex.h>
-#include <poll.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <limits.h>
-#include <errno.h>
-#include <sys/statfs.h>
-#include <sys/statvfs.h>
-#include <sys/sendfile.h>
-#include <sys/syscall.h>
-#include <sys/mman.h>
-#include <sys/resource.h>
-#include <sys/wait.h>
-#include <sys/uio.h>
-#include <termios.h>
-#include <pthread.h>
-#include <setjmp.h>
-#include <sched.h>
-#include <grp.h>
-#include <pwd.h>
-#include <netdb.h>
-#include <syslog.h>
-#include <libgen.h>
-#include <ctype.h>
-#include <spawn.h>
-#include <fenv.h>
-#include <complex.h>
-#include <math.h>
 CEOF
+
+# 自动包含所有系统头文件
+find "$MUSL_INC" -name '*.h' -type f | while read hdr; do
+  # 计算相对路径
+  rel=$(realpath --relative-to="$MUSL_INC" "$hdr")
+  echo "#include <$rel>" >> /tmp/all_musl_headers.c
+done
+# 加入可能的非 include 路径的头文件（mmap64.h 是我们注入的）
+for extra in mmap64.h; do
+  echo "#include \"$extra\"" >> /tmp/all_musl_headers.c 2>/dev/null || true
+done
+echo "头文件数: $(grep -c '#include' /tmp/all_musl_headers.c)"
 
 MUSL_HEADER_SYMS=/tmp/musl-header-syms.txt
 MUSL_HEADER_MACROS=/tmp/musl-header-macros.txt

@@ -539,12 +539,11 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
         # musl 头文件已有函数/类型声明 → 跳过
         if name in decls:
             continue
-        # 宏符号（无对应函数声明）：undef 防宏展开，不声明
+        # 宏符号（无对应函数声明）：undef 防宏展开，然后仍需声明
         if name in macros:
             lines.append(f"#ifdef {name}")
             lines.append(f"#undef {name}")
             lines.append(f"#endif")
-            continue
         # musl 完全缺失的符号 → extern 声明
         if name in sigs:
             ret, params = sigs[name]
