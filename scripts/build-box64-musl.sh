@@ -91,6 +91,7 @@ CEOF
 
 MUSL_HEADER_SYMS=/tmp/musl-header-syms.txt
 MUSL_HEADER_MACROS=/tmp/musl-header-macros.txt
+MUSL_HEADER_DECLS=/tmp/musl-header-decls.txt
 
 # 用 Python 预处理 musl 头文件并提取符号（比 bash 管道更可靠）
 python3 -c "
@@ -98,24 +99,10 @@ import subprocess, re, sys
 
 cc = '$CROSS_CC'
 flags = ['-D_GNU_SOURCE', '-D_DEFAULT_SOURCE']
+test_file = '/tmp/all_musl_headers.c'
 
-# 预处理提取所有标识符
-r = subprocess.run([cc, '-E'] + flags + ['/tmp/all_musl_headers.c'],
-                   capture_output=True, text=True)
-if r.returncode != 0:
-    print(f'警告: gcc -E 失败（退出码 {r.returncode}）', file=sys.stderr)
-    if r.stderr:
-        print(r.stderr[:500], file=sys.stderr)
-    # 写空文件，后续步骤仍可继续
-    open('$MUSL_HEADER_SYMS', 'w').close()
-    open('$MUSL_HEADER_MACROS', 'w').close()
-    sys.exit(0)
-
-identifiers = set(re.findall(r'[A-Za-z_][A-Za-z0-9_]*', r.stdout))
-print(f'预处理提取标识符: {len(identifiers)}')
-
-# 预处理 -dM 提取宏定义名
-r2 = subprocess.run([cc, '-E', '-dM'] + flags + ['/tmp/all_musl_headers.c'],
+# 第一遍：提取宏定义
+r2 = subprocess.run([cc, '-E', '-dM'] + flags + [test_file],
                     capture_output=True, text=True)
 macros = set()
 for line in r2.stdout.splitlines():
@@ -124,31 +111,52 @@ for line in r2.stdout.splitlines():
         macros.add(m.group(1))
 print(f'宏定义: {len(macros)}')
 
+# 生成 #undef 版本的测试文件：先 undef 所有宏，再 include 所有头
+# 这样被宏隐藏的函数声明（如 iswdigit 被 wctype.h 宏隐藏但 wchar.h 有声明）也能被提取
+undefs = ''.join(f'#undef {m}\n' for m in sorted(macros))
+r_clean = subprocess.run(
+    [cc, '-E'] + flags,
+    input=undefs + open(test_file).read(),
+    capture_output=True, text=True)
+if r_clean.returncode != 0:
+    print(f'警告: gcc -E (clean) 失败（退出码 {r_clean.returncode}）', file=sys.stderr)
+    decls = set()
+else:
+    decls = set(re.findall(r'[A-Za-z_][A-Za-z0-9_]*', r_clean.stdout))
+print(f'预处理提取标识符(undef后): {len(decls)}')
+
 # 写入文件
 with open('$MUSL_HEADER_MACROS', 'w') as f:
     for s in sorted(macros):
         f.write(s + '\n')
 
-all_syms = identifiers | macros
+# decls = 有真实函数/类型/变量声明的符号（不含纯宏）
+with open('$MUSL_HEADER_DECLS', 'w') as f:
+    for s in sorted(decls):
+        f.write(s + '\n')
+
+all_syms = decls | macros
 with open('$MUSL_HEADER_SYMS', 'w') as f:
     for s in sorted(all_syms):
         f.write(s + '\n')
 
-print(f'musl 头文件可见符号: {len(all_syms)}（其中宏: {len(macros)}）')
+print(f'musl 头文件可见符号: {len(all_syms)}（声明: {len(decls)}，宏: {len(macros)}）')
 "
 
 N_HDR=$(wc -l < $MUSL_HEADER_SYMS 2>/dev/null || echo 0)
 N_MAC=$(wc -l < $MUSL_HEADER_MACROS 2>/dev/null || echo 0)
-echo "musl 头文件可见符号: $N_HDR（其中宏: $N_MAC）"
+N_DCL=$(wc -l < $MUSL_HEADER_DECLS 2>/dev/null || echo 0)
+echo "musl 头文件: 声明 $N_DCL + 宏 $N_MAC = 总 $N_HDR"
 
 # 补充 mmap64.h（我们的注入头）声明的符号，避免 header 重复声明冲突
-# mmap64.h 声明了 __ctype_b_loc/__ctype_tolower_loc/__ctype_toupper_loc 等
 for sym in __ctype_b_loc __ctype_tolower_loc __ctype_toupper_loc __compar_d_fn_t mmap64; do
   grep -qxF "$sym" $MUSL_HEADER_SYMS || echo "$sym" >> $MUSL_HEADER_SYMS
+  grep -qxF "$sym" $MUSL_HEADER_DECLS || echo "$sym" >> $MUSL_HEADER_DECLS
 done
 
 export MUSL_HEADER_SYMS_FILE=$MUSL_HEADER_SYMS
 export MUSL_HEADER_MACROS_FILE=$MUSL_HEADER_MACROS
+export MUSL_HEADER_DECLS_FILE=$MUSL_HEADER_DECLS
 
 echo "==> 打 musl 补丁（isnanf -> isnan / fts 注入 / stub 头）"
 mkdir -p $WORK/include

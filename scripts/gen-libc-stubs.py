@@ -510,14 +510,19 @@ typedef void (*__sighandler_t)(int);
 
 
 def generate_header(func_refs, data_refs, sigs, smart, out_path,
-                    musl_header_syms=None, musl_macros=None):
+                    musl_header_syms=None, musl_header_decls=None,
+                    musl_macros=None):
     """生成 extern 声明头文件。
 
-    声明策略（基于交叉编译器预处理 musl 头文件的结果）：
-      - 函数：声明 func_refs 中不在 musl 头文件可见集合中的符号。
-        对于在 musl 头文件中是宏的符号（如 _tolower），先 #undef 再声明。
-        已由 musl 头文件声明的函数（inline/extern）不声明，避免 conflicting types。
-      - 数据：声明 data_refs 中不在 musl 头文件可见集合中的符号。
+    策略:
+      - decls = musl 头文件中作为函数/类型/变量声明可见的符号
+        （#undef 宏后预处理提取，含被宏隐藏的函数声明如 iswdigit）
+        → 已有声明，跳过。
+      - macros = 仅以宏形式存在的符号（decls 中无对应声明）
+        → 需要 #undef 防宏展开，但不声明。
+      - 既不在 decls 也不在 macros 中的符号（musl 完全缺失）
+        → 需要 extern 声明。
+      - 数据：声明 data_refs 中不在 header_syms 中的符号。
     """
     lines = [_HEADER_DECL]
     undefs = _render_undefs(smart)
@@ -526,21 +531,21 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
         lines.append(undefs)
 
     header_syms = musl_header_syms or set()
+    decls = musl_header_decls or set()
     macros = musl_macros or set()
-    # identifiers = 头文件中作为函数/类型/变量声明的符号（不含仅宏定义）
-    # 只对 identifiers 跳过声明；对仅宏符号做 #undef + 声明
-    identifiers = header_syms - macros
 
     lines.append("/* ================= 函数声明 ================= */")
     for name in sorted(func_refs):
-        # 在 musl 头文件中作为函数/类型/变量声明可见 → 编译器已知道，跳过
-        if name in identifiers:
+        # musl 头文件已有函数/类型声明 → 跳过
+        if name in decls:
             continue
-        # 宏符号：先 undef 防止 GO(N,W) 宏展开时被替换
+        # 宏符号（无对应函数声明）：undef 防宏展开，不声明
         if name in macros:
             lines.append(f"#ifdef {name}")
             lines.append(f"#undef {name}")
             lines.append(f"#endif")
+            continue
+        # musl 完全缺失的符号 → extern 声明
         if name in sigs:
             ret, params = sigs[name]
             lines.append(f"extern {ret} {name}({params});")
@@ -586,6 +591,8 @@ def main():
                     help="强制跳过某符号（即使缺失）")
     ap.add_argument("--musl-header-syms", default=None,
                     help="musl 头文件可见符号列表文件（交叉编译器预处理提取）")
+    ap.add_argument("--musl-header-decls", default=None,
+                    help="musl 头文件函数/类型声明列表文件（#undef 宏后预处理提取）")
     ap.add_argument("--musl-macros", default=None,
                     help="musl 头文件宏定义名列表文件（-dM 提取）")
     ap.add_argument("--check", action="store_true",
@@ -647,6 +654,12 @@ def main():
             musl_header_syms = {line.strip() for line in f if line.strip()}
         print(f"[musl] 头文件可见符号: {len(musl_header_syms)}")
 
+    musl_header_decls = set()
+    if args.musl_header_decls and os.path.isfile(args.musl_header_decls):
+        with open(args.musl_header_decls, encoding="utf-8") as f:
+            musl_header_decls = {line.strip() for line in f if line.strip()}
+        print(f"[musl] 头文件函数/类型声明: {len(musl_header_decls)}")
+
     musl_macros = set()
     if args.musl_macros and os.path.isfile(args.musl_macros):
         with open(args.musl_macros, encoding="utf-8") as f:
@@ -655,6 +668,7 @@ def main():
 
     h_lines = generate_header(func_refs, data_refs, sigs, smart, h_path,
                               musl_header_syms=musl_header_syms,
+                              musl_header_decls=musl_header_decls,
                               musl_macros=musl_macros)
 
     print(f"[生成] 输出 {args.output}（{nlines} 行）")

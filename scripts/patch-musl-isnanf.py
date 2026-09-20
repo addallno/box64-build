@@ -684,6 +684,10 @@ def inject_missing_symbols(root: str):
         if header_macros and os.path.isfile(header_macros) and os.path.getsize(header_macros) > 0:
             cmd.extend(["--musl-macros", header_macros])
             print(f"使用 musl 头文件宏: {header_macros}")
+        header_decls = os.environ.get("MUSL_HEADER_DECLS_FILE")
+        if header_decls and os.path.isfile(header_decls) and os.path.getsize(header_decls) > 0:
+            cmd.extend(["--musl-header-decls", header_decls])
+            print(f"使用 musl 头文件声明: {header_decls}")
         subprocess.run(cmd, check=True)
     else:
         priv = os.path.join(root, "src", "wrapped", "wrappedlibc_private.h")
