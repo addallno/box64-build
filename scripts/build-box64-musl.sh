@@ -20,10 +20,21 @@ $CROSS_CC --version
 
 echo "==> 提取 musl 符号列表（用于精确生成缺失符号 stub）"
 MUSL_SYMS=/tmp/musl-syms.txt
-$TOOLCHAIN/bin/$MUSL_ARCH-nm -g --defined-only $TOOLCHAIN/lib/libc.a \
-  | awk '/ [A-Z] /{print $3}' | sort -u > $MUSL_SYMS
-wc -l $MUSL_SYMS
-export MUSL_SYMS_FILE=$MUSL_SYMS
+MUSL_LIBC_A=$(find $TOOLCHAIN -name 'libc.a' -type f 2>/dev/null | head -1)
+if [ -n "$MUSL_LIBC_A" ]; then
+  echo "找到 libc.a: $MUSL_LIBC_A"
+  $TOOLCHAIN/bin/$MUSL_ARCH-nm -g --defined-only "$MUSL_LIBC_A" \
+    | awk '/ [A-Z] /{print $3}' | sort -u > $MUSL_SYMS
+  N_SYMS=$(wc -l < $MUSL_SYMS)
+  echo "musl 符号数: $N_SYMS"
+  if [ "$N_SYMS" -gt 0 ]; then
+    export MUSL_SYMS_FILE=$MUSL_SYMS
+  else
+    echo "警告: musl 符号文件为空，不设置 MUSL_SYMS_FILE"
+  fi
+else
+  echo "警告: 未找到 libc.a，不设置 MUSL_SYMS_FILE（将由 gen-libc-stubs.py 下载 musl 源码）"
+fi
 
 echo "==> 下载 box64 源码"
 cd $WORK
