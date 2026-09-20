@@ -54,16 +54,25 @@ cat > /tmp/all_musl_headers.c << 'CEOF'
 #define _DEFAULT_SOURCE
 CEOF
 
-# 自动包含所有系统头文件
-find "$MUSL_INC" -name '*.h' -type f | while read hdr; do
-  # 计算相对路径
+# 自动包含所有可直接 include 的 musl 头文件
+# 只取根目录 + sys/ netinet/ net/ arpa/ 子目录（标准 POSIX 布局）
+# 排除 bits/ asm/ asm-generic/ linux/ 等内核/ABI 头文件
+cat > /tmp/all_musl_headers.c << 'CEOF2'
+#define _GNU_SOURCE
+#define _DEFAULT_SOURCE
+CEOF2
+for dir in "" sys netinet net arpa gss complex rpc wchar; do
+  if [ -z "$dir" ]; then
+    find "$MUSL_INC" -maxdepth 1 -name '*.h' -type f
+  else
+    find "$MUSL_INC/$dir" -maxdepth 1 -name '*.h' -type f 2>/dev/null
+  fi
+done | while read hdr; do
   rel=$(realpath --relative-to="$MUSL_INC" "$hdr")
   echo "#include <$rel>" >> /tmp/all_musl_headers.c
 done
-# 加入可能的非 include 路径的头文件（mmap64.h 是我们注入的）
-for extra in mmap64.h; do
-  echo "#include \"$extra\"" >> /tmp/all_musl_headers.c 2>/dev/null || true
-done
+# 加入注入头
+echo '#include "mmap64.h"' >> /tmp/all_musl_headers.c
 echo "头文件数: $(grep -c '#include' /tmp/all_musl_headers.c)"
 
 MUSL_HEADER_SYMS=/tmp/musl-header-syms.txt
