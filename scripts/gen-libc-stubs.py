@@ -511,7 +511,7 @@ typedef void (*__sighandler_t)(int);
 
 def generate_header(func_refs, data_refs, sigs, smart, out_path,
                     musl_header_syms=None, musl_header_decls=None,
-                    musl_macros=None):
+                    musl_macros=None, musl_syms=None):
     """生成 extern 声明头文件。
 
     策略:
@@ -522,6 +522,8 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
         → 需要 #undef 防宏展开，但不声明。
       - 既不在 decls 也不在 macros 中的符号（musl 完全缺失）
         → 需要 extern 声明。
+      - 回退：若头文件提取失败（decls 为空），用 musl_syms（nm 输出）
+        做基本过滤：nm 中有定义的符号大概率已被 musl 头文件声明，跳过。
       - 数据：声明 data_refs 中不在 header_syms 中的符号。
     """
     lines = [_HEADER_DECL]
@@ -533,17 +535,29 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
     header_syms = musl_header_syms or set()
     decls = musl_header_decls or set()
     macros = musl_macros or set()
+    nm_syms = musl_syms or set()
+
+    # 检测头文件提取是否成功（decls + macros 至少 1000 个符号）
+    extraction_ok = len(decls) + len(macros) > 1000
+    if not extraction_ok:
+        print(f"[警告] 头文件符号提取可能失败（decls={len(decls)}, "
+              f"macros={len(macros)}），使用 musl_syms 回退过滤")
 
     lines.append("/* ================= 函数声明 ================= */")
     for name in sorted(func_refs):
         # musl 头文件已有函数/类型声明 → 跳过
         if name in decls:
             continue
-        # 宏符号（无对应函数声明）：undef 防宏展开，然后仍需声明
+        # 宏符号（无对应函数声明）：undef 防宏展开
         if name in macros:
             lines.append(f"#ifdef {name}")
             lines.append(f"#undef {name}")
             lines.append(f"#endif")
+            # 仅 undef，不声明（musl 有宏定义，说明此符号存在）
+            continue
+        # 回退模式：nm 中有定义的符号大概率已被 musl 头文件声明，跳过
+        if not extraction_ok and name in nm_syms:
+            continue
         # musl 完全缺失的符号 → extern 声明
         if name in sigs:
             ret, params = sigs[name]
@@ -668,7 +682,8 @@ def main():
     h_lines = generate_header(func_refs, data_refs, sigs, smart, h_path,
                               musl_header_syms=musl_header_syms,
                               musl_header_decls=musl_header_decls,
-                              musl_macros=musl_macros)
+                              musl_macros=musl_macros,
+                              musl_syms=musl_syms)
 
     print(f"[生成] 输出 {args.output}（{nlines} 行）")
     print(f"[生成] 输出 {h_path}（{h_lines} 行）")

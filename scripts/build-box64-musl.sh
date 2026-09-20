@@ -42,35 +42,88 @@ rm -rf box64
 git clone --depth 1 https://github.com/ptitSeb/box64.git
 
 echo "==> 提取 musl 头文件可见符号（用于精确区分 header 声明 vs stub 定义）"
-# 用 find 自动发现 musl sysroot 下所有头文件（避免手工遗漏）
-MUSL_INC=$(find $TOOLCHAIN -path '*/sysroot/usr/include' -type d 2>/dev/null | head -1)
-if [ -z "$MUSL_INC" ]; then
-  MUSL_INC=$(find $TOOLCHAIN -name 'stdlib.h' -path '*/include/*' -type f 2>/dev/null | head -1 | xargs dirname)
-fi
-echo "musl include 目录: $MUSL_INC"
-
+# 手工列表：覆盖所有 POSIX/系统头文件，确保 wrappedlibc_private.h 引用的符号能被正确识别
+# 已知 find 自动发现方案会导致 gcc -E 预处理失败（某些内部头冲突），故用手工列表
 cat > /tmp/all_musl_headers.c << 'CEOF'
 #define _GNU_SOURCE
 #define _DEFAULT_SOURCE
+#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
+#include <wchar.h>
+#include <wctype.h>
+#include <ctype.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <dirent.h>
+#include <signal.h>
+#include <time.h>
+#include <locale.h>
+#include <regex.h>
+#include <poll.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <limits.h>
+#include <errno.h>
+#include <sys/statfs.h>
+#include <sys/statvfs.h>
+#include <sys/sendfile.h>
+#include <sys/syscall.h>
+#include <sys/mman.h>
+#include <sys/resource.h>
+#include <sys/wait.h>
+#include <sys/uio.h>
+#include <termios.h>
+#include <pthread.h>
+#include <setjmp.h>
+#include <sched.h>
+#include <grp.h>
+#include <pwd.h>
+#include <netdb.h>
+#include <syslog.h>
+#include <libgen.h>
+#include <spawn.h>
+#include <fenv.h>
+#include <complex.h>
+#include <math.h>
+#include <iconv.h>
+#include <nl_types.h>
+#include <glob.h>
+#include <fnmatch.h>
+#include <wordexp.h>
+#include <search.h>
+#include <fmtmsg.h>
+#include <uchar.h>
+#include <utmpx.h>
+#include <utmp.h>
+#include <sys/epoll.h>
+#include <sys/inotify.h>
+#include <sys/signalfd.h>
+#include <sys/timerfd.h>
+#include <sys/mount.h>
+#include <sys/shm.h>
+#include <sys/sem.h>
+#include <sys/msg.h>
+#include <sys/random.h>
+#include <sys/ioctl.h>
+#include <sys/personality.h>
+#include <sys/sysinfo.h>
+#include <sys/fsuid.h>
+#include <sys/timex.h>
+#include <sys/un.h>
+#include <sys/prctl.h>
+#include <sys/ptrace.h>
+#include <sys/xattr.h>
+#include <sys/file.h>
+#include <sys/utsname.h>
+#include <sys/ipc.h>
+#include <arpa/inet.h>
+#include <netinet/tcp.h>
+#include <net/ethernet.h>
+#include <net/if.h>
 CEOF
-
-# 自动包含所有可直接 include 的 musl 头文件
-# 只取根目录 + sys/ netinet/ net/ arpa/ 子目录（标准 POSIX 布局）
-# 排除 bits/ asm/ asm-generic/ linux/ 等内核/ABI 头文件
-cat > /tmp/all_musl_headers.c << 'CEOF2'
-#define _GNU_SOURCE
-#define _DEFAULT_SOURCE
-CEOF2
-for dir in "" sys netinet net arpa gss complex rpc wchar; do
-  if [ -z "$dir" ]; then
-    find "$MUSL_INC" -maxdepth 1 -name '*.h' -type f 2>/dev/null || true
-  elif [ -d "$MUSL_INC/$dir" ]; then
-    find "$MUSL_INC/$dir" -maxdepth 1 -name '*.h' -type f 2>/dev/null || true
-  fi
-done | while read hdr; do
-  rel=$(realpath --relative-to="$MUSL_INC" "$hdr")
-  echo "#include <$rel>" >> /tmp/all_musl_headers.c
-done
 # 加入注入头
 echo '#include "mmap64.h"' >> /tmp/all_musl_headers.c
 echo "头文件数: $(grep -c '#include' /tmp/all_musl_headers.c)"
