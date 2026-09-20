@@ -670,6 +670,11 @@ def inject_missing_symbols(root: str):
             print(f"使用 gen-libc-stubs.py（musl-syms: {musl_syms}）")
         else:
             print("使用 gen-libc-stubs.py（将下载 musl 源码分析符号）")
+        # 额外声明：musl libc.a 有定义但头文件未声明的内部符号
+        extra = os.environ.get("EXTRA_DECLS_FILE")
+        if extra and os.path.isfile(extra) and os.path.getsize(extra) > 0:
+            cmd.extend(["--extra-decls", extra])
+            print(f"使用额外声明文件: {extra}")
         subprocess.run(cmd, check=True)
     else:
         priv = os.path.join(root, "src", "wrapped", "wrappedlibc_private.h")
