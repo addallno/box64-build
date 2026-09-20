@@ -703,9 +703,14 @@ if include_dir:
     inject_glibc_headers(include_dir)
 
 total = 0
+SKIP_PATCH = {"glibc_missing_symbols.c"}
+
+
 for dirpath, _dirs, files in os.walk(os.path.join(root, "src")):
     for fn in files:
         if not fn.endswith(".c") and not fn.endswith(".h"):
+            continue
+        if fn in SKIP_PATCH:
             continue
         path = os.path.join(dirpath, fn)
         with open(path, "r", encoding="utf-8", errors="replace") as f:
