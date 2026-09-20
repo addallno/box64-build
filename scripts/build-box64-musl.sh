@@ -94,7 +94,6 @@ cat > /tmp/all_musl_headers.c << 'CEOF'
 #include <fnmatch.h>
 #include <wordexp.h>
 #include <search.h>
-#include <fmtmsg.h>
 #include <uchar.h>
 #include <utmpx.h>
 #include <utmp.h>
@@ -116,7 +115,6 @@ cat > /tmp/all_musl_headers.c << 'CEOF'
 #include <sys/prctl.h>
 #include <sys/ptrace.h>
 #include <sys/xattr.h>
-#include <sys/file.h>
 #include <sys/utsname.h>
 #include <sys/ipc.h>
 #include <arpa/inet.h>

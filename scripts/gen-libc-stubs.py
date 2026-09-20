@@ -567,9 +567,26 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
 
     lines.append("")
     lines.append("/* ================= 数据声明 ================= */")
+    # musl 头文件中已声明的全局数据符号（即使提取失败也要跳过）
+    _MUSL_KNOWN_DATA = {
+        "daylight", "timezone", "tzname",
+        "optarg", "opterr", "optind", "optopt",
+        "stdin", "stdout", "stderr",
+        "environ", "errno",
+        "_IO_2_1_stdin_", "_IO_2_1_stdout_", "_IO_2_1_stderr_",
+        "_IO_file_jumps", "_IO_list_all",
+        "__progname", "__progname_full",
+        "_sys_siglist", "sys_siglist",
+        "_nl_msg_cat_cntr", "__check_rhosts_file",
+        "signgam",
+    }
     for name in sorted(data_refs):
-        if name not in header_syms:
-            lines.append(f"extern unsigned char {name}[{data_refs[name][0]}];")
+        if name in header_syms:
+            continue
+        # 回退：即使提取失败，跳过已知的 musl 声明数据符号
+        if not extraction_ok and name in _MUSL_KNOWN_DATA:
+            continue
+        lines.append(f"extern unsigned char {name}[{data_refs[name][0]}];")
 
     lines.append("")
     lines.append("#endif /* _GLIBC_MISSING_SYMBOLS_H */")
