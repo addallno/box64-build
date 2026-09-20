@@ -494,6 +494,9 @@ _HEADER_DECL = """\
 #ifndef _GLIBC_MISSING_SYMBOLS_H
 #define _GLIBC_MISSING_SYMBOLS_H
 
+/* 需要的系统头文件 */
+#include <wchar.h>
+
 /* glibc 专有类型别名 */
 typedef uid_t __uid_t;
 typedef gid_t __gid_t;
