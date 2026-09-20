@@ -154,7 +154,7 @@ MUSL_HEADER_DECLS=/tmp/musl-header-decls.txt
 
 # 用 Python 预处理 musl 头文件并提取符号（比 bash 管道更可靠）
 python3 -c "
-import subprocess, re, sys
+import subprocess, re, sys, os
 
 cc = '$CROSS_CC'
 flags = ['-D_GNU_SOURCE', '-D_DEFAULT_SOURCE']
