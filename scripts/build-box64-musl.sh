@@ -87,7 +87,6 @@ cat > /tmp/all_musl_headers.c << 'CEOF'
 #include <fenv.h>
 #include <complex.h>
 #include <math.h>
-#include <fts.h>
 CEOF
 
 MUSL_HEADER_SYMS=/tmp/musl-header-syms.txt
