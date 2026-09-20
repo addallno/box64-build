@@ -616,6 +616,13 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
         "sem_close", "sem_destroy", "sem_getvalue", "sem_init",
         "sem_open", "sem_post", "sem_timedwait", "sem_trywait",
         "sem_unlink", "sem_wait",
+        # musl <resolv.h> 声明
+        "__dn_comp", "__ns_get16", "__ns_get32",
+        "__ns_name_ntop", "__ns_name_unpack",
+        "__res_dnok", "__res_hnok", "__res_mailok", "__res_ownok", "__res_send",
+        "ns_get16", "ns_get32", "ns_initparse", "ns_name_ntop",
+        "ns_name_uncompress", "ns_name_unpack", "ns_parserr",
+        "ns_put16", "ns_put32", "ns_skiprr",
     }
     for name in sorted(func_refs):
         # 第零路：SMART_MATH 符号（isnan/isinf/finite 等）始终声明，
