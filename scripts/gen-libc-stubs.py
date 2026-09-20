@@ -483,6 +483,53 @@ def generate_stubs(missing_funcs, missing_datas, sigs, smart, out_path):
     return len(lines)
 
 
+_HEADER_DECL = """\
+/* 自动生成：box64 musl 静态链接下缺失 glibc 符号的 extern 声明
+ * 生成器: scripts/gen-libc-stubs.py（请勿手工编辑）
+ *
+ * 通过 -include 引入各编译单元，使 wrappedlibc_private.h 的
+ * GO(N,W) → {#N, W, 0, &N} 宏展开时能找到符号声明。
+ * 实际 weak 定义在 glibc_missing_symbols.c 中。
+ */
+#ifndef _GLIBC_MISSING_SYMBOLS_H
+#define _GLIBC_MISSING_SYMBOLS_H
+
+/* glibc 专有类型别名 */
+typedef uid_t __uid_t;
+typedef gid_t __gid_t;
+typedef pid_t __pid_t;
+typedef void (*__sighandler_t)(int);
+#define __sigset_t sigset_t
+
+"""
+
+
+def generate_header(missing_funcs, missing_datas, sigs, smart, out_path):
+    """生成 extern 声明头文件，供 -include 引入各编译单元。"""
+    lines = [_HEADER_DECL]
+    undefs = _render_undefs(smart)
+    if undefs:
+        lines.append("/* 屏蔽 musl <math.h> 宏定义 */")
+        lines.append(undefs)
+    lines.append("/* ================= 函数声明 ================= */")
+    for name in sorted(missing_funcs):
+        if name in sigs:
+            ret, params = sigs[name]
+            lines.append(f"extern {ret} {name}({params});")
+        else:
+            lines.append(f"extern void {name}(void);")
+    lines.append("")
+    lines.append("/* ================= 数据声明 ================= */")
+    for name in sorted(missing_datas):
+        lines.append(f"extern unsigned char {name}[{missing_datas[name]}];")
+    lines.append("")
+    lines.append("#endif /* _GLIBC_MISSING_SYMBOLS_H */")
+    lines.append("")
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+    return len(lines)
+
+
 # -------------------------------------------------------------------- 主流程
 
 def main():
@@ -493,6 +540,8 @@ def main():
     ap.add_argument("--static-libc-h", default=None,
                     help="static_libc.h 路径（默认 box64-src/src/libtools/static_libc.h）")
     ap.add_argument("--output", required=True, help="输出 stub .c 文件路径")
+    ap.add_argument("--output-h", default=None,
+                    help="输出 extern 声明 .h 文件路径（默认同目录 glibc_missing_symbols.h）")
     ap.add_argument("--musl-src", default=None,
                     help="musl 源码目录（提供则跳过下载）")
     ap.add_argument("--musl-url", default=None, help="musl tarball 下载 URL（可选）")
@@ -553,7 +602,12 @@ def main():
     os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)
     nlines = generate_stubs(missing_funcs, missing_datas, sigs, smart, args.output)
 
+    h_path = args.output_h or os.path.join(
+        os.path.dirname(args.output), "glibc_missing_symbols.h")
+    h_lines = generate_header(missing_funcs, missing_datas, sigs, smart, h_path)
+
     print(f"[生成] 输出 {args.output}（{nlines} 行）")
+    print(f"[生成] 输出 {h_path}（{h_lines} 行）")
     print(f"[统计] 缺失函数 stub: {len(missing_funcs)}，"
           f"其中智能实现(数学/转发): {len(smart)}")
     print(f"[统计] 缺失数据 stub: {len(missing_datas)}")

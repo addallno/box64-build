@@ -45,6 +45,9 @@ echo "==> 打 musl 补丁（isnanf -> isnan / fts 注入 / stub 头）"
 mkdir -p $WORK/include
 python3 $GITHUB_WORKSPACE/scripts/patch-musl-isnanf.py $WORK/box64 $WORK/include
 
+echo "==> 复制缺失符号声明头到 include 目录"
+cp $WORK/box64/src/libtools/glibc_missing_symbols.h $WORK/include/ || true
+
 echo "==> 提供 execinfo.h stub（musl 无此头，但 libc 含 backtrace 实现）"
 mkdir -p $WORK/include
 cat > $WORK/include/execinfo.h <<'EOF'
@@ -76,7 +79,7 @@ MUTEX_MACROS='-DPTHREAD_ERRORCHECK_MUTEX_INITIALIZER={{{2}}} -DPTHREAD_RECURSIVE
 cmake .. \
   -DCI=1 \
   -DCMAKE_C_COMPILER=$CROSS_CC \
-  -DCMAKE_C_FLAGS="-D_GNU_SOURCE -D_DEFAULT_SOURCE -I$WORK/include -include $WORK/include/mmap64.h $MUTEX_MACROS" \
+  -DCMAKE_C_FLAGS="-D_GNU_SOURCE -D_DEFAULT_SOURCE -I$WORK/include -include $WORK/include/mmap64.h -include $WORK/include/glibc_missing_symbols.h $MUTEX_MACROS" \
   -DARM_DYNAREC=ON \
   -DBOX32=ON \
   -DSTATICBUILD=ON \
