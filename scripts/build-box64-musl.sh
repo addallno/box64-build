@@ -349,17 +349,38 @@ cat > /tmp/check_header.c << 'CHEOF'
 #include "glibc_missing_symbols.h"
 CHEOF
 # 用交叉编译器检测冲突（-fsyntax-only 只做语法检查不生成目标文件）
-$CROSS_CC -fsyntax-only -D_GNU_SOURCE -D_DEFAULT_SOURCE \
-  -I$WORK/include -include $WORK/include/mmap64.h \
-  /tmp/check_header.c 2>/tmp/header_errors.txt || true
+# 自动重试：排除 check_header.c 中不存在的头文件
+: > /tmp/header_errors.txt
+for _retry in $(seq 1 10); do
+  $CROSS_CC -fsyntax-only -D_GNU_SOURCE -D_DEFAULT_SOURCE \
+    -I$WORK/include -include $WORK/include/mmap64.h \
+    /tmp/check_header.c 2>/tmp/header_errors_new.txt || true
+  # 检查是否有 fatal error（缺失头文件）
+  MISSING_HDRS=$(grep 'fatal error:' /tmp/header_errors_new.txt | sed "s/.*fatal error:\s*\([^ :]*\).*/\1/" | sort -u || true)
+  if [ -z "$MISSING_HDRS" ]; then
+    mv /tmp/header_errors_new.txt /tmp/header_errors.txt
+    break
+  fi
+  REMOVED=0
+  for hdr in $MISSING_HDRS; do
+    echo "check_header: 排除缺失头文件: $hdr"
+    sed -i "\|#include <$hdr>|d" /tmp/check_header.c
+    REMOVED=$((REMOVED+1))
+  done
+  if [ "$REMOVED" -eq 0 ]; then
+    mv /tmp/header_errors_new.txt /tmp/header_errors.txt
+    break
+  fi
+  cp /tmp/header_errors_new.txt /tmp/header_errors.txt
+done
 # 提取 conflicting types 的符号名
-grep "conflicting types for" /tmp/header_errors.txt \
-  | sed "s/.*conflicting types for '\([^']*\)'.*/\1/" | sort -u > /tmp/conflicts.txt
+(grep "conflicting types for" /tmp/header_errors.txt \
+  | sed "s/.*conflicting types for '\([^']*\)'.*/\1/" | sort -u > /tmp/conflicts.txt) || true
 # 也提取 undeclared 符号名（需要确保它们被声明）
-grep "undeclared here" /tmp/header_errors.txt \
-  | sed "s/.*error: '\([^']*\)' undeclared.*/\1/" | sort -u > /tmp/undeclared.txt
-N_CONFLICTS=$(wc -l < /tmp/conflicts.txt)
-N_UNDECLARED=$(wc -l < /tmp/undeclared.txt)
+(grep "undeclared here" /tmp/header_errors.txt \
+  | sed "s/.*error: '\([^']*\)' undeclared.*/\1/" | sort -u > /tmp/undeclared.txt) || true
+N_CONFLICTS=$(wc -l < /tmp/conflicts.txt 2>/dev/null || echo 0)
+N_UNDECLARED=$(wc -l < /tmp/undeclared.txt 2>/dev/null || echo 0)
 echo "冲突符号: $N_CONFLICTS，未声明符号: $N_UNDECLARED"
 if [ "$N_CONFLICTS" -gt 0 ]; then
   echo "冲突符号: $(cat /tmp/conflicts.txt | tr '\n' ' ')"
@@ -391,7 +412,7 @@ fi
 $CROSS_CC -fsyntax-only -D_GNU_SOURCE -D_DEFAULT_SOURCE \
   -I$WORK/include -include $WORK/include/mmap64.h \
   /tmp/check_header.c 2>/tmp/header_errors2.txt || true
-REMAINING=$(grep -c "conflicting types for" /tmp/header_errors2.txt || true)
+REMAINING=$(grep -c "conflicting types for" /tmp/header_errors2.txt 2>/dev/null || echo 0)
 echo "第二轮验证: 剩余冲突 $REMAINING"
 
 echo "==> 提供 execinfo.h stub（musl 无此头，但 libc 含 backtrace 实现）"
