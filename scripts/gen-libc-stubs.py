@@ -384,13 +384,14 @@ def build_smart_map(missing: set) -> dict:
 
 
 def _render_undefs(smart: dict) -> str:
-    """为 SMART_MATH 中所有符号生成 #undef，防止 musl <math.h> 宏展开冲突。"""
+    """为 SMART_MATH 中所有符号生成 #undef，防止 musl <math.h> 等头文件中的宏展开冲突。
+    必须覆盖所有符号（不只是 missing 中的），因为 musl 可能定义 A→B 宏，
+    导致一个 stub 的符号名被预处理器替换成另一个。"""
     undefs = []
     for sym in SMART_MATH:
-        if sym in smart:
-            undefs.append(f"#ifdef {sym}")
-            undefs.append(f"#undef {sym}")
-            undefs.append("#endif")
+        undefs.append(f"#ifdef {sym}")
+        undefs.append(f"#undef {sym}")
+        undefs.append("#endif")
     if undefs:
         return "\n".join(undefs) + "\n"
     return ""
