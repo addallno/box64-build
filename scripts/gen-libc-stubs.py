@@ -491,13 +491,16 @@ _HEADER_DECL = """\
  * 使 STATICBUILD 下 GO(N,W) → {#N, W, 0, &N} 宏展开时能找到符号声明。
  * 实际 weak 定义在 glibc_missing_symbols.c 中。
  *
- * 声明策略：只声明 musl 头文件中不可见的符号（避免 conflicting types）。
- * 对于 musl 中是宏的符号，先 #undef 再声明（使 &N 取函数地址）。
+ * 声明策略（三路过滤，最小化冲突）：
+ *   1. 在 musl 头文件 decls 中 → 跳过（musl 已声明）
+ *   2. 在 musl 头文件 macros 中 → 仅 #undef（musl 以宏形式提供）
+ *   3. 在 musl libc.a 中（nm 有定义）→ 跳过（链接器能找到，编译靠隐式声明）
+ *   4. 完全缺失 → extern 声明（仅对真正缺失的符号）
+ *
+ * 编译器需配合 -Wno-implicit-function-declaration 允许未声明函数取地址。
  */
 #ifndef _GLIBC_MISSING_SYMBOLS_H
 #define _GLIBC_MISSING_SYMBOLS_H
-
-#include <wchar.h>
 
 /* glibc 专有类型别名（musl 无这些 typedef） */
 typedef uid_t __uid_t;
@@ -514,17 +517,15 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
                     musl_macros=None, musl_syms=None):
     """生成 extern 声明头文件。
 
-    策略:
-      - decls = musl 头文件中作为函数/类型/变量声明可见的符号
-        （#undef 宏后预处理提取，含被宏隐藏的函数声明如 iswdigit）
-        → 已有声明，跳过。
-      - macros = 仅以宏形式存在的符号（decls 中无对应声明）
-        → 需要 #undef 防宏展开，但不声明。
-      - 既不在 decls 也不在 macros 中的符号（musl 完全缺失）
-        → 需要 extern 声明。
-      - 回退：若头文件提取失败（decls 为空），用 musl_syms（nm 输出）
-        做基本过滤：nm 中有定义的符号大概率已被 musl 头文件声明，跳过。
-      - 数据：声明 data_refs 中不在 header_syms 中的符号。
+    三路过滤策略（最小化与 musl/box64 头文件的类型冲突）:
+      1. decls 中的符号 → 跳过（musl 头文件已有函数/类型声明）
+      2. macros 中的符号 → 仅 #undef（musl 以宏形式提供，undef 后
+         编译器用隐式声明处理 &N，需 -Wno-implicit-function-declaration）
+      3. nm_syms 中的符号 → 跳过（musl libc.a 有定义，链接器能找到）
+      4. 完全缺失的符号 → extern 声明（从 sigs 获取正确签名，
+         否则回退 void(void)）
+
+    数据同理：跳过 header_syms、_MUSL_KNOWN_DATA、nm_syms 中的数据符号。
     """
     lines = [_HEADER_DECL]
     undefs = _render_undefs(smart)
@@ -537,34 +538,37 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
     macros = musl_macros or set()
     nm_syms = musl_syms or set()
 
-    # 检测头文件提取是否成功（decls + macros 至少 1000 个符号）
-    extraction_ok = len(decls) + len(macros) > 1000
-    if not extraction_ok:
-        print(f"[警告] 头文件符号提取可能失败（decls={len(decls)}, "
-              f"macros={len(macros)}），使用 musl_syms 回退过滤")
+    print(f"[header] 输入: func_refs={len(func_refs)}, decls={len(decls)}, "
+          f"macros={len(macros)}, nm_syms={len(nm_syms)}")
 
     lines.append("/* ================= 函数声明 ================= */")
+    declared = 0
+    undefed = 0
     for name in sorted(func_refs):
-        # musl 头文件已有函数/类型声明 → 跳过
+        # 第一路：musl 头文件已有函数/类型声明 → 跳过
         if name in decls:
             continue
-        # 宏符号：undef 防宏展开，然后 fallthrough 到声明
-        # （musl 宏可能是 _tolower/cfree 等仅以宏形式存在的函数，
-        #   undef 后需要 extern 声明使 &N 取地址可用）
+        # 第二路：musl 以宏形式提供 → 仅 #undef，不声明
+        # （宏被 undef 后，编译器可能用隐式声明处理 &N，-Wno-implicit-function-declaration 允许）
         if name in macros:
             lines.append(f"#ifdef {name}")
             lines.append(f"#undef {name}")
             lines.append(f"#endif")
-            # 不 continue，fallthrough 到下面的声明逻辑
-        # 回退模式：nm 中有定义的符号大概率已被 musl 头文件声明，跳过
-        if not extraction_ok and name in nm_syms:
+            undefed += 1
             continue
-        # musl 完全缺失的符号 → extern 声明
+        # 第三路：musl libc.a 中有定义（nm 找到）→ 跳过
+        # （链接器能找到符号，编译器可能用隐式声明）
+        if name in nm_syms:
+            continue
+        # 第四路：musl 完全缺失的符号 → extern 声明
         if name in sigs:
             ret, params = sigs[name]
             lines.append(f"extern {ret} {name}({params});")
         else:
             lines.append(f"extern void {name}(void);")
+        declared += 1
+    print(f"[header] 函数: undef={undefed}, 声明={declared}, "
+          f"跳过(decls/nm_syms)={len(func_refs)-undefed-declared}")
 
     lines.append("")
     lines.append("/* ================= 数据声明 ================= */")
@@ -584,8 +588,11 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
     for name in sorted(data_refs):
         if name in header_syms:
             continue
-        # 始终跳过已知的 musl 声明数据符号（包括 _IO_2_1_* 等 glibc 内部符号）
+        # 已知的 musl 声明数据符号 → 跳过
         if name in _MUSL_KNOWN_DATA:
+            continue
+        # nm 中有定义的数据符号 → 跳过（避免与已有声明冲突）
+        if name in nm_syms:
             continue
         lines.append(f"extern unsigned char {name}[{data_refs[name][0]}];")
 
