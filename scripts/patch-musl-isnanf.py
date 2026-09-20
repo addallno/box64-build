@@ -411,8 +411,19 @@ def patch_wrappedlibc_c(s: str):
       glibc 的 __xstat/__fxstat 族内部用 stat64 获取 64 位信息再 Unalign 到 x86 布局。
       musl 下直接用 struct stat / stat / fstat / lstat / fstatat（等价）。
     - qsort_r 的 __compar_d_fn_t 已由 mmap64.h（-include）提供 typedef。
+    - 在 #include "wrappedlibc_private.h" 前注入 glibc_missing_symbols.h，
+      为 GO(N,W) → {#N, W, 0, &N} 宏展开提供符号声明。
     只改函数体内部，保留 EXPORT my___*stat64(...) 的 alias 声明。
     """
+    # 注入缺失符号声明头（必须在 wrappedlibc_private.h 之前）
+    include_guard = '#include "glibc_missing_symbols.h"'
+    private_inc = '#include "wrappedlibc_private.h"'
+    if private_inc in s and include_guard not in s:
+        s = s.replace(private_inc, include_guard + "\n" + private_inc, 1)
+        count = 1
+    else:
+        count = 0
+
     pairs = [
         ("    struct stat64 st;\n", "    struct stat st;\n"),
         ("    struct  stat64 st;\n", "    struct stat st;\n"),
@@ -421,7 +432,6 @@ def patch_wrappedlibc_c(s: str):
         ("    int r = lstat64((const char*)name, buf?&st:buf);\n", "    int r = lstat((const char*)name, buf?&st:buf);\n"),
         ("    int r = fstatat64(d, path, &st, flags);\n", "    int r = fstatat(d, path, &st, flags);\n"),
     ]
-    count = 0
     for old, new in pairs:
         if old in s:
             # struct stat64 st 声明出现多次（各 *_stat 函数体），替换目标相同→全部替换
@@ -475,6 +485,14 @@ def patch_wrapped32_libc_c(s: str):
     x86 32 位程序的 stat 系统调用。宿主侧用 struct stat（musl 等价于 glibc struct stat64），
     经 FillStatFromStat64 转 i386_stat 布局。字段名不变。
     """
+    include_guard = '#include "glibc_missing_symbols.h"'
+    private_inc = '#include "wrappedlibc_private.h"'
+    if private_inc in s and include_guard not in s:
+        s = s.replace(private_inc, include_guard + "\n" + private_inc, 1)
+        count = 1
+    else:
+        count = 0
+
     pairs = [
         ("const struct stat64 *st64", "const struct stat *st64"),
         ("    struct stat64 s = {0};\n", "    struct stat s = {0};\n"),
