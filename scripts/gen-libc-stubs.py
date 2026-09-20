@@ -538,6 +538,10 @@ typedef void (*__sighandler_t)(int);
 /* 补充头文件：wrapped*_private.h 引用的符号可能依赖这些头文件的声明 */
 #include <utmp.h>
 #include <utmpx.h>
+#include <resolv.h>
+#include <pthread.h>
+#include <semaphore.h>
+#include <dlfcn.h>
 
 """
 
