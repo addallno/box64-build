@@ -344,8 +344,8 @@ SMART_EXTRA = {
     # ---- LFS64 接口：musl 全是宏/无符号，转发到 64 位等价实现 ----
     "getdents64":   "long getdents64(int fd, void* dirp, size_t count) { return syscall(SYS_getdents64, fd, dirp, count); }",
     "getdirentries64": "ssize_t getdirentries64(int fd, void* buf, size_t n, off_t* basep) { (void)basep; return syscall(SYS_getdents64, fd, buf, n); }",
-    "readdir64":    "void* readdir64(void* dirp) { return readdir(dirp); }",
-    "readdir64_r":  "int readdir64_r(void* dirp, void* entry, void** result) { return readdir_r(dirp, entry, result); }",
+    "readdir64":    "void* readdir64(void* dirp) { return readdir((DIR*)dirp); }",
+    "readdir64_r":  "int readdir64_r(void* dirp, void* entry, void** result) { return readdir_r((DIR*)dirp, (struct dirent*)entry, (struct dirent**)result); }",
     "creat64":      "int creat64(const char* path, mode_t mode) { return creat(path, mode); }",
     "freopen64":    "FILE* freopen64(const char* path, const char* mode, FILE* f) { return freopen(path, mode, f); }",
     "fseeko64":     "int fseeko64(FILE* f, off_t off, int whence) { return fseeko(f, off, whence); }",
@@ -381,6 +381,19 @@ def build_smart_map(missing: set) -> dict:
         if sym in missing:
             out[sym] = impl
     return out
+
+
+def _render_undefs(smart: dict) -> str:
+    """为 SMART_MATH 中所有符号生成 #undef，防止 musl <math.h> 宏展开冲突。"""
+    undefs = []
+    for sym in SMART_MATH:
+        if sym in smart:
+            undefs.append(f"#ifdef {sym}")
+            undefs.append(f"#undef {sym}")
+            undefs.append("#endif")
+    if undefs:
+        return "\n".join(undefs) + "\n"
+    return ""
 
 
 # ---------------------------------------------------------------- 生成 stub
@@ -441,6 +454,10 @@ def _render_data_stub(name: str, size: int):
 
 def generate_stubs(missing_funcs, missing_datas, sigs, smart, out_path):
     lines = [_HEADER]
+    undefs = _render_undefs(smart)
+    if undefs:
+        lines.append("/* 屏蔽 musl <math.h> 等头文件中的宏定义，避免与 stub 定义冲突 */")
+        lines.append(undefs)
     lines.append("/* ================= 函数 stub ================= */")
     for name in sorted(missing_funcs):
         if name in smart:
