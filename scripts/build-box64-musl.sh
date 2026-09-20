@@ -121,6 +121,7 @@ cat > /tmp/all_musl_headers.c << 'CEOF'
 #include <uchar.h>
 #include <utmpx.h>
 #include <utmp.h>
+#include <pty.h>
 #include <sys/epoll.h>
 #include <sys/inotify.h>
 #include <sys/signalfd.h>
