@@ -411,18 +411,9 @@ def patch_wrappedlibc_c(s: str):
       glibc 的 __xstat/__fxstat 族内部用 stat64 获取 64 位信息再 Unalign 到 x86 布局。
       musl 下直接用 struct stat / stat / fstat / lstat / fstatat（等价）。
     - qsort_r 的 __compar_d_fn_t 已由 mmap64.h（-include）提供 typedef。
-    - 在 #include "wrappedlibc_private.h" 前注入 glibc_missing_symbols.h，
-      为 GO(N,W) → {#N, W, 0, &N} 宏展开提供符号声明。
     只改函数体内部，保留 EXPORT my___*stat64(...) 的 alias 声明。
     """
-    # 注入缺失符号声明头（必须在 wrappedlibc_private.h 之前）
-    include_guard = '#include "glibc_missing_symbols.h"'
-    private_inc = '#include "wrappedlibc_private.h"'
-    if private_inc in s and include_guard not in s:
-        s = s.replace(private_inc, include_guard + "\n" + private_inc, 1)
-        count = 1
-    else:
-        count = 0
+    count = 0
 
     pairs = [
         ("    struct stat64 st;\n", "    struct stat st;\n"),
@@ -485,14 +476,7 @@ def patch_wrapped32_libc_c(s: str):
     x86 32 位程序的 stat 系统调用。宿主侧用 struct stat（musl 等价于 glibc struct stat64），
     经 FillStatFromStat64 转 i386_stat 布局。字段名不变。
     """
-    include_guard = '#include "glibc_missing_symbols.h"'
-    private_inc = '#include "wrappedlibc_private.h"'
-    if private_inc in s and include_guard not in s:
-        s = s.replace(private_inc, include_guard + "\n" + private_inc, 1)
-        count = 1
-    else:
-        count = 0
-
+    count = 0
     pairs = [
         ("const struct stat64 *st64", "const struct stat *st64"),
         ("    struct stat64 s = {0};\n", "    struct stat s = {0};\n"),
@@ -708,6 +692,37 @@ def inject_missing_symbols(root: str):
         print("CMakeLists.txt: 已把 glibc_missing_symbols.c 加入无条件 ELFLOADER_SRC")
 
 
+def inject_wrappedlib_init_h(root: str, include_dir: str = None):
+    """在 wrappedlib_init.h 的 include guard 后注入 glibc_missing_symbols.h，
+    使 STATICBUILD 下 GO(N,W) → {#N, W, 0, &N} 宏展开时所有符号已声明。
+    注入点：#endif（LIBNAME guard）之后、#include "debug.h" 之前。"""
+    if not include_dir:
+        return
+    init_h = os.path.join(root, "src", "wrapped", "wrappedlib_init.h")
+    if not os.path.exists(init_h):
+        print(f"跳过 wrappedlib_init.h（不存在: {init_h}）")
+        return
+    with open(init_h, "r", encoding="utf-8") as f:
+        s = f.read()
+    guard = '#include "glibc_missing_symbols.h"'
+    if guard in s:
+        print("wrappedlib_init.h: glibc_missing_symbols.h 已注入")
+        return
+    anchor = '#endif\n\n#include "debug.h"'
+    if anchor not in s:
+        # 尝试不带双换行的版本
+        anchor = '#endif\n#include "debug.h"'
+    if anchor in s:
+        s = s.replace(anchor, '#endif\n\n' + guard + '\n\n#include "debug.h"', 1)
+    else:
+        # 兜底：在文件开头 SPDX 注释后插入
+        s = s.replace('// SPDX-License-Identifier: MIT\n',
+                       '// SPDX-License-Identifier: MIT\n' + guard + '\n', 1)
+    with open(init_h, "w", encoding="utf-8") as f:
+        f.write(s)
+    print(f"wrappedlib_init.h: 已注入 {guard}")
+
+
 root = sys.argv[1]
 include_dir = sys.argv[2] if len(sys.argv) > 2 else None
 
@@ -716,6 +731,7 @@ inject_obstack(root, include_dir)
 inject_error(root, include_dir)
 inject_scandirat(root)
 inject_missing_symbols(root)
+inject_wrappedlib_init_h(root, include_dir)
 if include_dir:
     write_stub_headers(include_dir)
     inject_glibc_headers(include_dir)
