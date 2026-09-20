@@ -289,6 +289,33 @@ def parse_static_libc_signatures(h_path: str) -> dict:
     return sig
 
 
+def parse_static_libc_symbols(h_path: str) -> set:
+    """解析 static_libc.h 中所有已声明或定义的函数名（包括 extern 声明和内联函数体）。
+
+    返回函数名集合；generate_header() 中跳过这些符号，避免与 static_libc.h 冲突。
+    """
+    syms = set()
+    # extern 声明: extern TYPE NAME(...)
+    re_ext = re.compile(
+        r"^\s*extern\s+\S+\s+(\w+)\s*\(")
+    # 内联函数定义: TYPE NAME(...) {
+    re_def = re.compile(
+        r"^\s*\S+\s+(\w+)\s*\([^)]*\)\s*\{")
+    for line in open(h_path, encoding="utf-8"):
+        m = re_ext.match(line)
+        if m:
+            name = m.group(1)
+            if not name.startswith("my_"):
+                syms.add(name)
+            continue
+        m = re_def.match(line)
+        if m:
+            name = m.group(1)
+            if not name.startswith("my_"):
+                syms.add(name)
+    return syms
+
+
 # ------------------------------------------------------------- 智能数学 stub
 
 # 数学判定符号：glibc 导出函数，musl 用宏实现（无符号）。
@@ -491,22 +518,15 @@ _HEADER_DECL = """\
  * 使 STATICBUILD 下 GO(N,W) → {#N, W, 0, &N} 宏展开时能找到符号声明。
  * 实际 weak 定义在 glibc_missing_symbols.c 中。
  *
- * 声明策略（三路过滤，最小化冲突）：
- *   1. 在 musl 头文件 decls 中 → 跳过（musl 已声明）
- *   2. 在 musl 头文件 macros 中 → 仅 #undef（musl 以宏形式提供）
- *   3. 在 musl libc.a 中（nm 有定义）→ 跳过（链接器能找到，编译靠隐式声明）
- *   4. 完全缺失 → extern 声明（仅对真正缺失的符号）
- *
- * 编译器需配合 -Wno-implicit-function-declaration 允许未声明函数取地址。
+ * 声明策略（四路过滤，最小化冲突）：
+ *   1. 在 static_libc.h 中（声明/定义）→ 跳过（static_libc.h 先于此头被 include）
+ *   2. 在 musl 头文件 decls 中 → 跳过（musl 已声明）
+ *   3. 在 musl 头文件 macros 中 → 仅 #undef（musl 以宏形式提供）
+ *   4. 完全缺失 → extern void(void)（-Wno-implicit-function-declaration 允许取地址）
  */
+
 #ifndef _GLIBC_MISSING_SYMBOLS_H
 #define _GLIBC_MISSING_SYMBOLS_H
-
-/* mbstate_t 最小兼容定义（与 musl <wchar.h> 布局完全一致） */
-/* 若 <wchar.h> 已被包含则跳过，否则提供类型使 static_libc.h 签名可编译 */
-#ifndef _WCHAR_H
-typedef struct { union { int __wch; char __wchb[4]; } __value; } mbstate_t;
-#endif
 
 /* glibc 专有类型别名（musl 无这些 typedef） */
 typedef uid_t __uid_t;
@@ -519,20 +539,19 @@ typedef void (*__sighandler_t)(int);
 
 
 def generate_header(func_refs, data_refs, sigs, smart, out_path,
-                    musl_header_syms=None, musl_header_decls=None,
-                    musl_macros=None, musl_syms=None):
+                    musl_header_decls=None,
+                    musl_macros=None,
+                    static_libc_syms=None):
     """生成 extern 声明头文件。
 
-    三路过滤策略（最小化与 musl/box64 头文件的类型冲突）:
-      1. decls 中的符号 → 跳过（musl 头文件已有函数/类型声明）
-      2. macros 中的符号 → #undef 后 fallthrough 到声明（宏被替换为 extern
-         声明，-Wno-implicit-function-declaration 允许隐式取地址）
-      3. nm_syms 中的符号 → 跳过（musl libc.a 有定义，链接器能找到）
-      4. 完全缺失的符号 → extern 声明（从 sigs 获取正确签名，
-         否则回退 void(void)）
+    四路过滤策略（最小化与 musl/box64 头文件的类型冲突）:
+      1. static_libc_syms 中的符号 → 跳过（box64 static_libc.h 已声明/定义，
+         在 wrappedlibc.c 中先于本头文件被 include）
+      2. decls 中的符号 → 跳过（musl 头文件已有函数/类型声明）
+      3. macros 中的符号 → #undef 后 fallthrough 到声明
+      4. 完全缺失的符号 → extern 声明
 
-    数据同理：跳过 header_syms、_MUSL_KNOWN_DATA 中的数据符号。
-    注意：数据符号**不跳过 nm_syms**（glibc __ 前缀数据在 musl 中不存在）。
+    数据同理：跳过 decls/macros、_MUSL_KNOWN_DATA 中的数据符号。
     """
     lines = [_HEADER_DECL]
     undefs = _render_undefs(smart)
@@ -540,48 +559,40 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
         lines.append("/* 屏蔽 musl <math.h> 宏定义 */")
         lines.append(undefs)
 
-    header_syms = musl_header_syms or set()
     decls = musl_header_decls or set()
     macros = musl_macros or set()
-    nm_syms = musl_syms or set()
+    slc_syms = static_libc_syms or set()
 
     # 过滤 dummy_* 假符号（wrappedlibc_private.h 中的特殊条目，非真实 C 函数）
     func_refs = {n for n in func_refs if not n.startswith("dummy_")}
 
     print(f"[header] 输入: func_refs={len(func_refs)}, decls={len(decls)}, "
-          f"macros={len(macros)}, nm_syms={len(nm_syms)}")
+          f"macros={len(macros)}, static_libc={len(slc_syms)}")
 
     lines.append("/* ================= 函数声明 ================= */")
     declared = 0
     undefed = 0
+    skipped_slc = 0
     for name in sorted(func_refs):
-        # 第一路：musl 头文件已有函数/类型声明 → 跳过
+        # 第一路：static_libc.h 已声明/定义 → 跳过（避免与其冲突）
+        if name in slc_syms:
+            skipped_slc += 1
+            continue
+        # 第二路：musl 头文件已有函数/类型声明 → 跳过
         if name in decls:
             continue
-        # 第二路：musl 以宏形式提供 → #undef 后 fallthrough 到声明
-        # （宏被替换后，extern 声明提供正确类型）
+        # 第三路：musl 以宏形式提供 → #undef 后 fallthrough 到声明
         if name in macros:
             lines.append(f"#ifdef {name}")
             lines.append(f"#undef {name}")
             lines.append(f"#endif")
             undefed += 1
-        # 第三路：musl libc.a 中有定义（nm 找到）→ 跳过
-        # （链接器能找到符号，编译器可能用隐式声明）
-        if name in nm_syms:
-            continue
         # 第四路：完全缺失的符号 → extern 声明
-        if name in sigs:
-            ret, params = sigs[name]
-            # 跳过签名引用 mbstate_t 但 mbstate_t 尚未定义的符号
-            if "mbstate_t" in params:
-                lines.append(f"extern void {name}(void);")
-            else:
-                lines.append(f"extern {ret} {name}({params});")
-        else:
-            lines.append(f"extern void {name}(void);")
+        lines.append(f"extern void {name}(void);")
         declared += 1
     print(f"[header] 函数: undef={undefed}, 声明={declared}, "
-          f"跳过(decls/nm_syms)={len(func_refs)-undefed-declared}")
+          f"跳过(static_libc)={skipped_slc}, "
+          f"跳过(decls)={len(func_refs)-undefed-declared-skipped_slc}")
 
     lines.append("")
     lines.append("/* ================= 数据声明 ================= */")
@@ -599,7 +610,8 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
         "signgam",
     }
     for name in sorted(data_refs):
-        if name in header_syms:
+        # musl 头文件已声明的数据 → 跳过
+        if name in decls or name in macros:
             continue
         # 已知的 musl 声明数据符号 → 跳过
         if name in _MUSL_KNOWN_DATA:
@@ -672,9 +684,10 @@ def main():
     # 2. box64 引用符号
     func_refs, data_refs = parse_private_refs(priv)
     sigs = parse_static_libc_signatures(slh)
+    static_libc_syms = parse_static_libc_symbols(slh)
     if args.verbose:
         print(f"[box64] 引用函数 {len(func_refs)}、数据 {len(data_refs)}、"
-              f"static_libc.h 签名 {len(sigs)}")
+              f"static_libc.h 签名 {len(sigs)}、定义+声明 {len(static_libc_syms)}")
 
     # 3. 差集
     missing_funcs = {s for s in func_refs if s not in musl_syms}
@@ -715,10 +728,9 @@ def main():
         print(f"[musl] 头文件宏: {len(musl_macros)}")
 
     h_lines = generate_header(func_refs, data_refs, sigs, smart, h_path,
-                              musl_header_syms=musl_header_syms,
                               musl_header_decls=musl_header_decls,
                               musl_macros=musl_macros,
-                              musl_syms=musl_syms)
+                              static_libc_syms=static_libc_syms)
 
     print(f"[生成] 输出 {args.output}（{nlines} 行）")
     print(f"[生成] 输出 {h_path}（{h_lines} 行）")

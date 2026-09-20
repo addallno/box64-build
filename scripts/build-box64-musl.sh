@@ -150,6 +150,16 @@ cat > /tmp/all_musl_headers.c << 'CEOF'
 #include <langinfo.h>
 #include <sys/times.h>
 #include <utime.h>
+#include <shadow.h>
+#include <libintl.h>
+#include <malloc.h>
+#include <sys/timeb.h>
+#include <fmtmsg.h>
+#include <sys/eventfd.h>
+#include <sys/fanotify.h>
+#include <sys/klog.h>
+#include <sys/quota.h>
+#include <sys/reboot.h>
 CEOF
 echo "头文件数: $(grep -c '#include' /tmp/all_musl_headers.c)"
 
