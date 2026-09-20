@@ -721,7 +721,7 @@ if include_dir:
     inject_glibc_headers(include_dir)
 
 total = 0
-SKIP_PATCH = {"glibc_missing_symbols.c"}
+SKIP_PATCH = {"glibc_missing_symbols.c", "glibc_missing_symbols.h"}
 
 
 for dirpath, _dirs, files in os.walk(os.path.join(root, "src")):
