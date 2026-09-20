@@ -573,6 +573,31 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
     declared = 0
     undefed = 0
     skipped_slc = 0
+    # musl 头文件已声明但 gcc -E 提取可能遗漏的函数（musl 内部实现/条件声明）
+    _KNOWN_MUSL_DECLS = {
+        "arc4random", "arc4random_buf", "arc4random_uniform",
+        "__fdelt_chk", "__xpg_basename", "dn_skipname",
+        "fts_close", "fts_open", "fts_set", "fts_children", "fts_read",
+        "open_tree", "move_mount", "fsmount", "fsopen", "fsconfig",
+        "fsmove",
+        "strerrorname_np",
+        "__sigaddset", "__sigismember", "__sigdelset",
+        "__mbsnrtowcs_chk", "__mbsrtowcs_chk",
+        "__wcrtomb_chk", "__wcsrtombs_chk",
+        "cfree", "tfind", "tsearch", "tdestroy", "twalk",
+        "__getdelim", "__overflow", "__uflow",
+        "__stpcpy", "__stpncpy",
+        "_tolower", "_toupper",
+        "__tolower_l", "__toupper_l",
+        "prlimit64",
+        "__daylight", "__timezone", "__tzname",
+        "eventfd", "eventfd_read", "eventfd_write",
+        "fanotify_init", "fanotify_mark",
+        "klogctl", "quotactl", "reboot",
+        "malloc_usable_size",
+        "fmtmsg", "ftime",
+        "__progname", "__progname_full",
+    }
     for name in sorted(func_refs):
         # 第一路：static_libc.h 已声明/定义 → 跳过（避免与其冲突）
         if name in slc_syms:
@@ -580,6 +605,9 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
             continue
         # 第二路：musl 头文件已有函数/类型声明 → 跳过
         if name in decls:
+            continue
+        # 第二路半：musl 已知声明（gcc -E 提取遗漏的条件声明/内联函数）
+        if name in _KNOWN_MUSL_DECLS:
             continue
         # 第三路：musl 以宏形式提供 → #undef 后 fallthrough 到声明
         if name in macros:
