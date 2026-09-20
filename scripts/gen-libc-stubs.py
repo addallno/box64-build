@@ -729,21 +729,24 @@ def main():
         musl_syms = parse_musl_src(musl_root, args.verbose)
         print(f"[musl] 源码解析符号集: {len(musl_syms)} 个")
 
-    # 2. box64 引用符号（解析所有 wrapped*_private.h）
+    # 2. box64 引用符号（解析 wrappedlibc_private.h + wrappedlibm_private.h）
     func_refs, data_refs = parse_private_refs(priv)
-    # 扫描 src/wrapped/ 下所有 wrapped*_private.h（补充数学/工具/线程等符号）
-    wrapped_dir = os.path.join(args.box64_src, "src", "wrapped")
-    if os.path.isdir(wrapped_dir):
-        for fn in sorted(os.listdir(wrapped_dir)):
-            if fn.endswith("_private.h") and fn != os.path.basename(priv):
-                p = os.path.join(wrapped_dir, fn)
-                extra_func, extra_data = parse_private_refs(p)
-                new_funcs = set(extra_func) - set(func_refs)
-                new_data = set(extra_data) - set(data_refs)
-                if new_funcs or new_data:
-                    print(f"[box64] {fn}: +{len(new_funcs)} 函数, +{len(new_data)} 数据")
-                func_refs.update(extra_func)
-                data_refs.update(extra_data)
+    # 只补充核心 libc 相关的 private headers（不扫描所有 wrapped*_private.h，
+    # 因为外部库 wrapped headers 引入大量非 libc 符号导致 header 膨胀）
+    _EXTRA_PRIVATES = [
+        "wrappedlibm_private.h",
+        "wrappedutil_private.h",
+    ]
+    for fn in _EXTRA_PRIVATES:
+        p = os.path.join(args.box64_src, "src", "wrapped", fn)
+        if os.path.isfile(p):
+            extra_func, extra_data = parse_private_refs(p)
+            new_funcs = set(extra_func) - set(func_refs)
+            new_data = set(extra_data) - set(data_refs)
+            if new_funcs or new_data:
+                print(f"[box64] {fn}: +{len(new_funcs)} 函数, +{len(new_data)} 数据")
+            func_refs.update(extra_func)
+            data_refs.update(extra_data)
     sigs = parse_static_libc_signatures(slh)
     static_libc_syms = parse_static_libc_symbols(slh)
     if args.verbose:
