@@ -548,13 +548,14 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
         # musl 头文件已有函数/类型声明 → 跳过
         if name in decls:
             continue
-        # 宏符号（无对应函数声明）：undef 防宏展开
+        # 宏符号：undef 防宏展开，然后 fallthrough 到声明
+        # （musl 宏可能是 _tolower/cfree 等仅以宏形式存在的函数，
+        #   undef 后需要 extern 声明使 &N 取地址可用）
         if name in macros:
             lines.append(f"#ifdef {name}")
             lines.append(f"#undef {name}")
             lines.append(f"#endif")
-            # 仅 undef，不声明（musl 有宏定义，说明此符号存在）
-            continue
+            # 不 continue，fallthrough 到下面的声明逻辑
         # 回退模式：nm 中有定义的符号大概率已被 musl 头文件声明，跳过
         if not extraction_ok and name in nm_syms:
             continue
@@ -583,8 +584,8 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
     for name in sorted(data_refs):
         if name in header_syms:
             continue
-        # 回退：即使提取失败，跳过已知的 musl 声明数据符号
-        if not extraction_ok and name in _MUSL_KNOWN_DATA:
+        # 始终跳过已知的 musl 声明数据符号（包括 _IO_2_1_* 等 glibc 内部符号）
+        if name in _MUSL_KNOWN_DATA:
             continue
         lines.append(f"extern unsigned char {name}[{data_refs[name][0]}];")
 
