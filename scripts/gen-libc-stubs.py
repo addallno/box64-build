@@ -433,6 +433,12 @@ _HEADER = """\
 #include <sys/statvfs.h>
 #include <sys/sendfile.h>
 #include <sys/syscall.h>
+/* glibc 专有类型别名，musl 无这些 typedef，但从 static_libc.h 签名引用 */
+typedef uid_t __uid_t;
+typedef gid_t __gid_t;
+typedef pid_t __pid_t;
+typedef void (*__sighandler_t)(int);
+#define __sigset_t sigset_t
 """
 
 
