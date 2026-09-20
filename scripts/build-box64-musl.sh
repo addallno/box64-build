@@ -122,8 +122,6 @@ cat > /tmp/all_musl_headers.c << 'CEOF'
 #include <net/ethernet.h>
 #include <net/if.h>
 CEOF
-# 加入注入头
-echo '#include "mmap64.h"' >> /tmp/all_musl_headers.c
 echo "头文件数: $(grep -c '#include' /tmp/all_musl_headers.c)"
 
 MUSL_HEADER_SYMS=/tmp/musl-header-syms.txt
@@ -146,6 +144,11 @@ for line in r2.stdout.splitlines():
     m = re.match(r'^#define\s+(\w+)', line)
     if m:
         macros.add(m.group(1))
+if len(macros) == 0:
+    print(f'gcc -E -dM 退出码: {r2.returncode}', file=sys.stderr)
+    print(f'stdout 长度: {len(r2.stdout)}', file=sys.stderr)
+    print(f'stdout 前 500 字符: {r2.stdout[:500]}', file=sys.stderr)
+    print(f'stderr 前 500 字符: {r2.stderr[:500]}', file=sys.stderr)
 print(f'宏定义: {len(macros)}')
 
 # 生成 #undef 版本的测试文件：先 undef 所有宏，再 include 所有头
