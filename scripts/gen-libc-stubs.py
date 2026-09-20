@@ -527,10 +527,12 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
       1. decls 中的符号 → 跳过（musl 头文件已有函数/类型声明）
       2. macros 中的符号 → #undef 后 fallthrough 到声明（宏被替换为 extern
          声明，-Wno-implicit-function-declaration 允许隐式取地址）
-      3. 完全缺失的符号 → extern 声明（从 sigs 获取正确签名，
+      3. nm_syms 中的符号 → 跳过（musl libc.a 有定义，链接器能找到）
+      4. 完全缺失的符号 → extern 声明（从 sigs 获取正确签名，
          否则回退 void(void)）
 
     数据同理：跳过 header_syms、_MUSL_KNOWN_DATA 中的数据符号。
+    注意：数据符号**不跳过 nm_syms**（glibc __ 前缀数据在 musl 中不存在）。
     """
     lines = [_HEADER_DECL]
     undefs = _render_undefs(smart)
@@ -541,12 +543,13 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
     header_syms = musl_header_syms or set()
     decls = musl_header_decls or set()
     macros = musl_macros or set()
+    nm_syms = musl_syms or set()
 
     # 过滤 dummy_* 假符号（wrappedlibc_private.h 中的特殊条目，非真实 C 函数）
     func_refs = {n for n in func_refs if not n.startswith("dummy_")}
 
     print(f"[header] 输入: func_refs={len(func_refs)}, decls={len(decls)}, "
-          f"macros={len(macros)}")
+          f"macros={len(macros)}, nm_syms={len(nm_syms)}")
 
     lines.append("/* ================= 函数声明 ================= */")
     declared = 0
@@ -562,11 +565,14 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
             lines.append(f"#undef {name}")
             lines.append(f"#endif")
             undefed += 1
-        # 第三路：完全缺失的符号 → extern 声明
+        # 第三路：musl libc.a 中有定义（nm 找到）→ 跳过
+        # （链接器能找到符号，编译器可能用隐式声明）
+        if name in nm_syms:
+            continue
+        # 第四路：完全缺失的符号 → extern 声明
         if name in sigs:
             ret, params = sigs[name]
             # 跳过签名引用 mbstate_t 但 mbstate_t 尚未定义的符号
-            # （<wchar.h> 未被包含时 mbstate_t 可能不存在）
             if "mbstate_t" in params:
                 lines.append(f"extern void {name}(void);")
             else:
@@ -575,14 +581,13 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
             lines.append(f"extern void {name}(void);")
         declared += 1
     print(f"[header] 函数: undef={undefed}, 声明={declared}, "
-          f"跳过(decls)={len(func_refs)-undefed-declared}")
+          f"跳过(decls/nm_syms)={len(func_refs)-undefed-declared}")
 
     lines.append("")
     lines.append("/* ================= 数据声明 ================= */")
     # musl 头文件中已声明的全局数据符号（即使提取失败也要跳过）
     _MUSL_KNOWN_DATA = {
         "daylight", "timezone", "tzname",
-        "__daylight", "__timezone", "__tzname",
         "optarg", "opterr", "optind", "optopt",
         "stdin", "stdout", "stderr",
         "environ", "errno",
