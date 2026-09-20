@@ -487,20 +487,17 @@ _HEADER_DECL = """\
 /* 自动生成：box64 musl 静态链接下缺失 glibc 符号的 extern 声明
  * 生成器: scripts/gen-libc-stubs.py（请勿手工编辑）
  *
- * 通过 -include 引入各编译单元，使 wrappedlibc_private.h 的
- * GO(N,W) → {#N, W, 0, &N} 宏展开时能找到符号声明。
+ * 通过 wrappedlib_init.h → #include "glibc_missing_symbols.h" 引入，
+ * 使 STATICBUILD 下 GO(N,W) → {#N, W, 0, &N} 宏展开时能找到符号声明。
  * 实际 weak 定义在 glibc_missing_symbols.c 中。
+ *
+ * 声明策略：只声明 musl 头文件中不可见的符号（避免 conflicting types）。
+ * 对于 musl 中是宏的符号，先 #undef 再声明（使 &N 取函数地址）。
  */
 #ifndef _GLIBC_MISSING_SYMBOLS_H
 #define _GLIBC_MISSING_SYMBOLS_H
 
-/* 最小类型前向声明（避免引入系统头文件导致冲突） */
-#ifndef __WCHAR_TYPE__
-typedef int wchar_t;
-#endif
-typedef struct { int __bs; } mbstate_t;
-
-/* glibc 专有类型别名 */
+/* glibc 专有类型别名（musl 无这些 typedef） */
 typedef uid_t __uid_t;
 typedef gid_t __gid_t;
 typedef pid_t __pid_t;
@@ -510,42 +507,47 @@ typedef void (*__sighandler_t)(int);
 """
 
 
-def generate_header(missing_funcs, missing_datas, func_refs, data_refs,
-                    sigs, smart, out_path, extra_DECLS=None):
+def generate_header(func_refs, data_refs, sigs, smart, out_path,
+                    musl_header_syms=None, musl_macros=None):
     """生成 extern 声明头文件。
 
-    只声明 musl 头文件中**没有**的符号：
-      1. missing_funcs / missing_datas — musl libc.a 完全没有的符号（需 stub + 声明）
-      2. extra_DECLS 中的符号 — musl libc.a 有定义但头文件未声明的内部符号
-         （如 __getdelim、__stpcpy、_tolower 等，需声明但不需 stub）
-
-    不声明已由 musl 头文件提供的标准函数（如 _Exit、abs、calloc 等），
-    避免与 <stdlib.h>/<string.h> 等的声明产生 conflicting types。
+    声明策略（基于交叉编译器预处理 musl 头文件的结果）：
+      - 函数：声明 func_refs 中不在 musl 头文件可见集合中的符号。
+        对于在 musl 头文件中是宏的符号（如 _tolower），先 #undef 再声明。
+        已由 musl 头文件声明的函数（inline/extern）不声明，避免 conflicting types。
+      - 数据：声明 data_refs 中不在 musl 头文件可见集合中的符号。
     """
     lines = [_HEADER_DECL]
     undefs = _render_undefs(smart)
     if undefs:
         lines.append("/* 屏蔽 musl <math.h> 宏定义 */")
         lines.append(undefs)
-    # 需要声明的函数 = 真正缺失的 + 有定义但头文件未声明的
-    need_decl = set(missing_funcs)
-    if extra_DECLS:
-        need_decl |= set(extra_DECLS)
+
+    header_syms = musl_header_syms or set()
+    macros = musl_macros or set()
+
     lines.append("/* ================= 函数声明 ================= */")
-    for name in sorted(need_decl):
+    for name in sorted(func_refs):
+        # 在 musl 头文件中可见且不是宏 → 编译器已知道，跳过
+        if name in header_syms and name not in macros:
+            continue
+        # 宏符号：先 undef 防止 GO(N,W) 宏展开时被替换
+        if name in macros:
+            lines.append(f"#ifdef {name}")
+            lines.append(f"#undef {name}")
+            lines.append(f"#endif")
         if name in sigs:
             ret, params = sigs[name]
             lines.append(f"extern {ret} {name}({params});")
         else:
             lines.append(f"extern void {name}(void);")
+
     lines.append("")
     lines.append("/* ================= 数据声明 ================= */")
-    for name in sorted(missing_datas):
-        lines.append(f"extern unsigned char {name}[{missing_datas[name]}];")
-    # data_refs 中不在 musl 中的符号也需要声明
     for name in sorted(data_refs):
-        if name not in missing_datas and extra_DECLS and name in extra_DECLS:
+        if name not in header_syms:
             lines.append(f"extern unsigned char {name}[{data_refs[name][0]}];")
+
     lines.append("")
     lines.append("#endif /* _GLIBC_MISSING_SYMBOLS_H */")
     lines.append("")
@@ -577,8 +579,10 @@ def main():
                     help="强制对某符号生成 stub（即使符号集认为 musl 存在）")
     ap.add_argument("--no-stub", action="append", default=[],
                     help="强制跳过某符号（即使缺失）")
-    ap.add_argument("--extra-decls", default=None,
-                    help="额外需要 extern 声明的符号列表文件（musl libc.a 有但头文件未声明的内部符号，每行一个）")
+    ap.add_argument("--musl-header-syms", default=None,
+                    help="musl 头文件可见符号列表文件（交叉编译器预处理提取）")
+    ap.add_argument("--musl-macros", default=None,
+                    help="musl 头文件宏定义名列表文件（-dM 提取）")
     ap.add_argument("--check", action="store_true",
                     help="若检测到交叉 gcc，对生成的 stub.c 做 -fsyntax-only 校验")
     ap.add_argument("-v", "--verbose", action="store_true")
@@ -630,13 +634,23 @@ def main():
 
     h_path = args.output_h or os.path.join(
         os.path.dirname(args.output), "glibc_missing_symbols.h")
-    extra_DECLS = None
-    if args.extra_decls and os.path.isfile(args.extra_decls):
-        with open(args.extra_decls, encoding="utf-8") as f:
-            extra_DECLS = {line.strip() for line in f if line.strip() and not line.startswith("#")}
-        print(f"[声明] 额外需要声明的符号: {len(extra_DECLS)}")
-    h_lines = generate_header(missing_funcs, missing_datas, func_refs, data_refs,
-                              sigs, smart, h_path, extra_DECLS)
+
+    # 加载 musl 头文件可见符号集
+    musl_header_syms = set()
+    if args.musl_header_syms and os.path.isfile(args.musl_header_syms):
+        with open(args.musl_header_syms, encoding="utf-8") as f:
+            musl_header_syms = {line.strip() for line in f if line.strip()}
+        print(f"[musl] 头文件可见符号: {len(musl_header_syms)}")
+
+    musl_macros = set()
+    if args.musl_macros and os.path.isfile(args.musl_macros):
+        with open(args.musl_macros, encoding="utf-8") as f:
+            musl_macros = {line.strip() for line in f if line.strip()}
+        print(f"[musl] 头文件宏: {len(musl_macros)}")
+
+    h_lines = generate_header(func_refs, data_refs, sigs, smart, h_path,
+                              musl_header_syms=musl_header_syms,
+                              musl_macros=musl_macros)
 
     print(f"[生成] 输出 {args.output}（{nlines} 行）")
     print(f"[生成] 输出 {h_path}（{h_lines} 行）")

@@ -41,9 +41,10 @@ cd $WORK
 rm -rf box64
 git clone --depth 1 https://github.com/ptitSeb/box64.git
 
-echo "==> 检测 musl 头文件未声明的内部符号（func_refs ∩ musl_syms 中不在头文件的）"
-# 创建测试文件：包含所有相关 musl 头文件
-cat > /tmp/check_DECLS.c << 'CEOF'
+echo "==> 提取 musl 头文件可见符号（用于精确区分 header 声明 vs stub 定义）"
+# 预处理所有相关 musl 头文件，提取可见标识符和宏名
+# 用于 gen-libc-stubs.py：header 只声明 musl 头文件中不可见的符号，避免 conflicting types
+cat > /tmp/all_musl_headers.c << 'CEOF'
 #define _GNU_SOURCE
 #define _DEFAULT_SOURCE
 #include <stdlib.h>
@@ -86,59 +87,32 @@ cat > /tmp/check_DECLS.c << 'CEOF'
 #include <fenv.h>
 #include <complex.h>
 #include <math.h>
+#include <fts.h>
 CEOF
 
-# 从 wrappedlibc_private.h 提取所有 GO 宏引用的符号名
-python3 -c "
-import sys, re, os
-priv = '$WORK/box64/src/wrapped/wrappedlibc_private.h'
-syms_file = '$MUSL_SYMS'
-if not os.path.exists(priv) or not os.path.exists(syms_file):
-    sys.exit(0)
-# 读取 musl 符号集
-musl = set()
-with open(syms_file) as f:
-    for line in f:
-        s = line.strip()
-        if s: musl.add(s)
-# 解析 wrappedlibc_private.h
-func_re = re.compile(r'^(?:GO|GOW|GOD|GOWD|GO2|GOW2)\(([A-Za-z_]\w*)')
-data_re = re.compile(r'^(?:DATA|DATAB|DATAV)\(([A-Za-z_]\w*)')
-refs = set()
-with open(priv) as f:
-    for line in f:
-        t = line.strip()
-        m = func_re.match(t)
-        if m:
-            name = m.group(1)
-            if not name.startswith('my_'):
-                refs.add(name)
-# 取交集：在 musl 中有定义但可能不在头文件中的符号
-needed = sorted(refs & musl)
-for s in needed:
-    print(f'void* __chk_{s} = (void*)&{s};')
-" >> /tmp/check_DECLS.c
+MUSL_HEADER_SYMS=/tmp/musl-header-syms.txt
+MUSL_HEADER_MACROS=/tmp/musl-header-macros.txt
 
-# 用交叉编译器检测未声明的符号
-EXTRA_DECLS=/tmp/extra-decls.txt
-if [ -f /tmp/check_DECLS.c ] && [ -s /tmp/check_DECLS.c ]; then
-  $CROSS_CC -fsyntax-only -D_GNU_SOURCE -D_DEFAULT_SOURCE -I$WORK/include \
-    -include $WORK/include/mmap64.h /tmp/check_DECLS.c 2>&1 \
-    | grep -oP "implicit declaration of function '\K[^']+" \
-    | sort -u > $EXTRA_DECLS || true
-  N_EXTRA=$(wc -l < $EXTRA_DECLS 2>/dev/null || echo 0)
-  echo "musl 头文件未声明的内部符号: $N_EXTRA"
-  if [ "$N_EXTRA" -gt 0 ]; then
-    cat $EXTRA_DECLS
-  fi
-else
-  echo "无额外符号需要检测"
-  > $EXTRA_DECLS
-fi
+# 预处理提取所有可见标识符（函数/类型/变量名等）
+$CROSS_CC -E -D_GNU_SOURCE -D_DEFAULT_SOURCE /tmp/all_musl_headers.c 2>/dev/null | \
+    grep -oP '\b[A-Za-z_][A-Za-z0-9_]*\b' | sort -u > /tmp/musl_header_ids.txt
+
+# 提取宏定义名（-dM 输出所有 #define）
+$CROSS_CC -E -dM -D_GNU_SOURCE -D_DEFAULT_SOURCE /tmp/all_musl_headers.c 2>/dev/null | \
+    awk '/^#define/ {print $2}' | sort -u > $MUSL_HEADER_MACROS
+
+# 合并为完整的头文件可见符号集
+cat /tmp/musl_header_ids.txt $MUSL_HEADER_MACROS | sort -u > $MUSL_HEADER_SYMS
+
+N_HDR=$(wc -l < $MUSL_HEADER_SYMS)
+N_MAC=$(wc -l < $MUSL_HEADER_MACROS)
+echo "musl 头文件可见符号: $N_HDR（其中宏: $N_MAC）"
+
+export MUSL_HEADER_SYMS_FILE=$MUSL_HEADER_SYMS
+export MUSL_HEADER_MACROS_FILE=$MUSL_HEADER_MACROS
 
 echo "==> 打 musl 补丁（isnanf -> isnan / fts 注入 / stub 头）"
 mkdir -p $WORK/include
-export EXTRA_DECLS_FILE=/tmp/extra-decls.txt
 python3 $GITHUB_WORKSPACE/scripts/patch-musl-isnanf.py $WORK/box64 $WORK/include
 
 echo "==> 复制缺失符号声明头到 include 目录"
