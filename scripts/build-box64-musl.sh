@@ -93,19 +93,53 @@ CEOF
 MUSL_HEADER_SYMS=/tmp/musl-header-syms.txt
 MUSL_HEADER_MACROS=/tmp/musl-header-macros.txt
 
-# 预处理提取所有可见标识符（函数/类型/变量名等）
-$CROSS_CC -E -D_GNU_SOURCE -D_DEFAULT_SOURCE /tmp/all_musl_headers.c 2>/dev/null | \
-    grep -oP '\b[A-Za-z_][A-Za-z0-9_]*\b' | sort -u > /tmp/musl_header_ids.txt
+# 用 Python 预处理 musl 头文件并提取符号（比 bash 管道更可靠）
+python3 -c "
+import subprocess, re, sys
 
-# 提取宏定义名（-dM 输出所有 #define）
-$CROSS_CC -E -dM -D_GNU_SOURCE -D_DEFAULT_SOURCE /tmp/all_musl_headers.c 2>/dev/null | \
-    awk '/^#define/ {print $2}' | sort -u > $MUSL_HEADER_MACROS
+cc = '$CROSS_CC'
+flags = ['-D_GNU_SOURCE', '-D_DEFAULT_SOURCE']
 
-# 合并为完整的头文件可见符号集
-cat /tmp/musl_header_ids.txt $MUSL_HEADER_MACROS | sort -u > $MUSL_HEADER_SYMS
+# 预处理提取所有标识符
+r = subprocess.run([cc, '-E'] + flags + ['/tmp/all_musl_headers.c'],
+                   capture_output=True, text=True)
+if r.returncode != 0:
+    print(f'警告: gcc -E 失败（退出码 {r.returncode}）', file=sys.stderr)
+    if r.stderr:
+        print(r.stderr[:500], file=sys.stderr)
+    # 写空文件，后续步骤仍可继续
+    open('$MUSL_HEADER_SYMS', 'w').close()
+    open('$MUSL_HEADER_MACROS', 'w').close()
+    sys.exit(0)
 
-N_HDR=$(wc -l < $MUSL_HEADER_SYMS)
-N_MAC=$(wc -l < $MUSL_HEADER_MACROS)
+identifiers = set(re.findall(r'[A-Za-z_][A-Za-z0-9_]*', r.stdout))
+print(f'预处理提取标识符: {len(identifiers)}')
+
+# 预处理 -dM 提取宏定义名
+r2 = subprocess.run([cc, '-E', '-dM'] + flags + ['/tmp/all_musl_headers.c'],
+                    capture_output=True, text=True)
+macros = set()
+for line in r2.stdout.splitlines():
+    m = re.match(r'^#define\s+(\w+)', line)
+    if m:
+        macros.add(m.group(1))
+print(f'宏定义: {len(macros)}')
+
+# 写入文件
+with open('$MUSL_HEADER_MACROS', 'w') as f:
+    for s in sorted(macros):
+        f.write(s + '\n')
+
+all_syms = identifiers | macros
+with open('$MUSL_HEADER_SYMS', 'w') as f:
+    for s in sorted(all_syms):
+        f.write(s + '\n')
+
+print(f'musl 头文件可见符号: {len(all_syms)}（其中宏: {len(macros)}）')
+"
+
+N_HDR=$(wc -l < $MUSL_HEADER_SYMS 2>/dev/null || echo 0)
+N_MAC=$(wc -l < $MUSL_HEADER_MACROS 2>/dev/null || echo 0)
 echo "musl 头文件可见符号: $N_HDR（其中宏: $N_MAC）"
 
 export MUSL_HEADER_SYMS_FILE=$MUSL_HEADER_SYMS
