@@ -597,6 +597,23 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
         "fmtmsg", "ftime",
         "__progname", "__progname_full",
         "openpty",
+        # musl <pthread.h> / <semaphore.h> 静态内联变体
+        "__pthread_mutex_init", "__pthread_mutex_lock",
+        "__pthread_mutex_unlock", "__pthread_mutex_trylock",
+        "__pthread_mutex_destroy", "__pthread_mutex_timedlock",
+        "__pthread_cond_init", "__pthread_cond_wait",
+        "__pthread_cond_timedwait", "__pthread_cond_signal",
+        "__pthread_cond_broadcast", "__pthread_cond_destroy",
+        "__pthread_rwlock_init", "__pthread_rwlock_rdlock",
+        "__pthread_rwlock_wrlock", "__pthread_rwlock_unlock",
+        "__pthread_rwlock_tryrdlock", "__pthread_rwlock_trywrlock",
+        "__pthread_rwlock_destroy",
+        "__pthread_key_create", "__pthread_key_delete",
+        "__pthread_getspecific", "__pthread_setspecific",
+        "pthread_mutexattr_getkind_np", "pthread_mutexattr_setkind_np",
+        "sem_close", "sem_destroy", "sem_getvalue", "sem_init",
+        "sem_open", "sem_post", "sem_timedwait", "sem_trywait",
+        "sem_unlink", "sem_wait",
     }
     for name in sorted(func_refs):
         # 第零路：SMART_MATH 符号（isnan/isinf/finite 等）始终声明，
@@ -732,11 +749,24 @@ def main():
 
     # 2. box64 引用符号（解析 wrappedlibc_private.h + wrappedlibm_private.h）
     func_refs, data_refs = parse_private_refs(priv)
-    # 只补充核心 libc 相关的 private headers（不扫描所有 wrapped*_private.h，
+    # 补充核心 libc 相关的 private headers（不扫描所有 wrapped*_private.h，
     # 因为外部库 wrapped headers 引入大量非 libc 符号导致 header 膨胀）
     _EXTRA_PRIVATES = [
         "wrappedlibm_private.h",
         "wrappedutil_private.h",
+        "wrappedlibresolv_private.h",
+        "wrappedlibpthread_private.h",
+        "wrappedlibrt_private.h",
+        "wrappedlibcrypt_private.h",
+        "wrappedlibdl_private.h",
+        "wrappedlibmvec_private.h",
+        "wrappedanl_private.h",
+        "wrappedldlinux_private.h",
+        "wrappedlibbsd_private.h",
+        "wrappednsl_private.h",
+        "wrappediconv_private.h",
+        "wrappedcap_private.h",
+        "wrappedlibcmusl_private.h",
     ]
     for fn in _EXTRA_PRIVATES:
         p = os.path.join(args.box64_src, "src", "wrapped", fn)
