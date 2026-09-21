@@ -32,6 +32,9 @@ REPL = {  # 优先匹配更长的 f 变体
     "readdir64_r(": "readdir_r(",
     # glibc 内部类型别名，musl 用同名公共类型（布局一致）
     "__sigset_t": "sigset_t",
+    # LFS64 函数：musl 无单独的 64 位目录遍历函数（本就 64 位），
+    # alphasort64 不是 wrappedlibctypes.h 的 struct 成员，安全替换
+    "alphasort64": "alphasort",
     # glibc 的 _NP 初始化宏 → 无后缀占位（musl 无 ERRORCHECK/RECURSIVE 静态初始化宏，
     # 实际值由 build 脚本 CFLAGS 注入，见 PTHREAD_MUTEX_INITIALIZER_* 定义）
     "PTHREAD_ERRORCHECK_MUTEX_INITIALIZER_NP": "PTHREAD_ERRORCHECK_MUTEX_INITIALIZER",
