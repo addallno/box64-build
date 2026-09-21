@@ -770,30 +770,24 @@ def main():
         musl_syms = parse_musl_src(musl_root, args.verbose)
         print(f"[musl] 源码解析符号集: {len(musl_syms)} 个")
 
-    # 2. box64 引用符号（解析 wrappedlibc_private.h + wrappedlibm_private.h）
+    # 2. box64 引用符号：扫描所有 wrapped*_private.h
+    # glibc_missing_symbols.h 通过 wrappedlib_init.h 被所有 wrappedXXX.c include，
+    # 因此必须覆盖所有 wrapped*_private.h 中引用的符号
     func_refs, data_refs = parse_private_refs(priv)
-    # 补充核心 libc 相关的 private headers（不扫描所有 wrapped*_private.h，
-    # 因为外部库 wrapped headers 引入大量非 libc 符号导致 header 膨胀）
-    _EXTRA_PRIVATES = [
-        "wrappedlibm_private.h",
-        "wrappedutil_private.h",
-        "wrappedlibresolv_private.h",
-        "wrappedlibpthread_private.h",
-        "wrappedlibrt_private.h",
-        "wrappedlibcrypt_private.h",
-        "wrappedlibdl_private.h",
-        "wrappedlibmvec_private.h",
-        "wrappedanl_private.h",
-        "wrappedldlinux_private.h",
-        "wrappedlibbsd_private.h",
-        "wrappednsl_private.h",
-        "wrappediconv_private.h",
-        "wrappedcap_private.h",
-        "wrappedlibcmusl_private.h",
-    ]
-    for fn in _EXTRA_PRIVATES:
-        p = os.path.join(args.box64_src, "src", "wrapped", fn)
-        if os.path.isfile(p):
+    wrapped_dir = os.path.join(args.box64_src, "src", "wrapped")
+    # 也扫描 wrapped32 子目录（如果有）
+    wrapped32_dir = os.path.join(args.box64_src, "src", "wrapped32")
+    scanned = {priv}  # 避免重复扫描 wrappedlibc_private.h
+    for scan_dir in [wrapped_dir, wrapped32_dir]:
+        if not os.path.isdir(scan_dir):
+            continue
+        for fn in sorted(os.listdir(scan_dir)):
+            if not fn.endswith("_private.h"):
+                continue
+            p = os.path.join(scan_dir, fn)
+            if p in scanned:
+                continue
+            scanned.add(p)
             extra_func, extra_data = parse_private_refs(p)
             new_funcs = set(extra_func) - set(func_refs)
             new_data = set(extra_data) - set(data_refs)
