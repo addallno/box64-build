@@ -630,6 +630,12 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
         "ns_put16", "ns_put32", "ns_skiprr",
         # static_libc.h 冲突：返回 void* vs struct __res_state*
         "__res_state",
+        # musl <mqueue.h> 已声明
+        "__mq_open_2", "mq_close", "mq_getattr", "mq_open",
+        "mq_receive", "mq_send", "mq_setattr",
+        "mq_timedreceive", "mq_timedsend", "mq_unlink",
+        # musl <aio.h> 已声明
+        "aio_error", "aio_fsync", "aio_return", "aio_suspend",
     }
     for name in sorted(func_refs):
         # 第零路：SMART_MATH 符号（isnan/isinf/finite 等）始终声明，
