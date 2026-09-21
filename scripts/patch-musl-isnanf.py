@@ -412,8 +412,6 @@ def write_stub_headers(include_dir: str):
                 "/* LFS64 兼容：musl 无 LFS64 类型（off_t/ino_t 已经 64 位）。\n"
                 "   用 #define 做 token 级别替换（C 预处理器整 token 匹配，\n"
                 "   fstat64/stat64 等是单独 token，不受 struct statfs64 替换影响）。*/\n"
-                "#include <sys/statfs.h>\n"
-                "#include <glob.h>\n"
                 "#define statfs64 statfs\n"
                 "#define dirent64 dirent\n"
                 "#define glob64_t glob_t\n"
