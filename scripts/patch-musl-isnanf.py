@@ -751,22 +751,22 @@ def inject_wrappedlib_init_h(root: str, include_dir: str = None):
 # ---- wrappedldlinux.c 专项：移除与 glibc_missing_symbols.h 冲突的本地 extern 声明 ----
 # wrappedldlinux.c 自己声明了 extern void* __libc_enable_secure / __stack_chk_guard 等，
 # 但 glibc_missing_symbols.h 通过 wrappedlib_init.h 注入，声明它们为 extern unsigned char[N]。
-# 两者类型冲突。移除本地声明，由 header 统一提供。
-LDLINUX_EXTERN_DECLS = """extern void* __libc_enable_secure;
-extern void* __libc_stack_end;
-extern void* __stack_chk_guard;
-extern void* __pointer_chk_guard;"""
-
-LDLINUX_EXTERN_PATCH = """/* 由 glibc_missing_symbols.h 通过 wrappedlib_init.h 统一声明，
- * 移除本地 extern void* 避免类型冲突 */"""
+# 两者类型冲突。注释掉本地声明，由 header 统一提供。
+LDLINUX_EXTERN_REPLACEMENTS = {
+    "extern void* __libc_enable_secure;": "/* 由 glibc_missing_symbols.h 声明 */",
+    "extern void* __libc_stack_end;": "/* 由 glibc_missing_symbols.h 声明 */",
+    "extern void* __stack_chk_guard;": "/* 由 glibc_missing_symbols.h 声明 */",
+    "extern void* __pointer_chk_guard;": "/* 由 glibc_missing_symbols.h 声明 */",
+}
 
 
 def patch_wrappedldlinux_c(s: str):
     """wrappedldlinux.c：移除与 glibc_missing_symbols.h 冲突的 extern void* 声明。"""
     count = 0
-    if LDLINUX_EXTERN_DECLS in s:
-        s = s.replace(LDLINUX_EXTERN_DECLS, LDLINUX_EXTERN_PATCH, 1)
-        count += 1
+    for old, new in LDLINUX_EXTERN_REPLACEMENTS.items():
+        if old in s:
+            s = s.replace(old, new, 1)
+            count += 1
     return s, count
 
 
