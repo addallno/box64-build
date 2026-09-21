@@ -600,6 +600,7 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
         "__sigaddset", "__sigismember", "__sigdelset",
         "__mbsnrtowcs_chk", "__mbsrtowcs_chk",
         "__wcrtomb_chk", "__wcsrtombs_chk",
+        "readdir64", "readdir64_r",  # musl 无 LFS64 目录遍历，implicit declaration 足够
         "cfree", "tfind", "tsearch", "tdestroy", "twalk",
         "prlimit64",
         "eventfd", "eventfd_read", "eventfd_write",
@@ -660,6 +661,9 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
         "__wcstold_l",
     }
     for name in sorted(func_refs):
+        # 前置跳过：musl 已知声明/内联/宏（优先级最高，避免与 smart 路径冲突）
+        if name in _KNOWN_MUSL_DECLS:
+            continue
         # 第零路：SMART_MATH 符号（isnan/isinf/finite 等）始终声明，
         # 因为 wrappedlibm.c 等文件可能不包含 <math.h>，需要这些声明。
         # 用 #undef + 正确签名（从 smart map 推导）。
@@ -687,9 +691,6 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
             continue
         # 第二路：musl 头文件已有函数/类型声明 → 跳过
         if name in decls:
-            continue
-        # 第二路半：musl 已知声明（gcc -E 提取遗漏的条件声明/内联函数）
-        if name in _KNOWN_MUSL_DECLS:
             continue
         # 第三路：musl 以宏形式提供 → #undef 后 fallthrough 到声明
         if name in macros:
@@ -719,6 +720,7 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
         "_nl_msg_cat_cntr", "__check_rhosts_file",
         "signgam",
         "__res_state",
+        "__libc_enable_secure",  # wrappedldlinux.c 声明为 extern void*，与 DATA unsigned char[] 冲突
     }
     for name in sorted(data_refs):
         # musl 头文件已声明的数据 → 跳过
