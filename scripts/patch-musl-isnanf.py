@@ -409,12 +409,10 @@ def write_stub_headers(include_dir: str):
                 "#ifndef __NFDBITS\n"
                 "#define __NFDBITS NFDBITS\n"
                 "#endif\n"
-                "/* LFS64 兼容：musl 无 LFS64 类型（off_t/ino_t 已经 64 位）。\n"
-                "   用 #define 做 token 级别替换（C 预处理器整 token 匹配，\n"
-                "   fstat64/stat64 等是单独 token，不受 struct statfs64 替换影响）。*/\n"
-                "#define statfs64 statfs\n"
-                "#define dirent64 dirent\n"
-                "#define glob64_t glob_t\n"
+                "/* LFS64 头文件：提供 struct statfs、glob_t、GLOB_ALTDIRFUNC 等\n"
+                "   （不加 #define 宏，避免干扰 glibc_missing_symbols.c 的 extern 声明）*/\n"
+                "#include <sys/statfs.h>\n"
+                "#include <glob.h>\n"
                 "#endif /* _MMAP64_H_ */\n"
             )
         print(f"写入 {mmap_h}")
@@ -522,10 +520,14 @@ def patch_wrapped32_libc_c(s: str):
         ("    int r = stat64((const char*)path, &st);\n", "    int r = stat((const char*)path, &st);\n"),
         ("    int r = lstat64((const char*)name, &st);\n", "    int r = lstat((const char*)name, &st);\n"),
         ("    int r = fstatat64(d, path, &st, flags);\n", "    int r = fstatat(d, path, &st, flags);\n"),
-        # --- statfs64 → statfs（struct statfs64 由 mmap64.h #define 提供，但函数调用需替换） ---
+        # --- statfs64 → statfs（类型 + 函数调用） ---
+        ("struct statfs64", "struct statfs"),
         ("statfs64(path, &st)", "statfs(path, &st)"),
         ("fstatfs64(fd, &st)", "fstatfs(fd, &st)"),
-        # --- glob64 → glob（mmap64.h 提供 glob64_t→glob_t，函数调用需替换） ---
+        # --- dirent64 → dirent ---
+        ("struct dirent64", "struct dirent"),
+        # --- glob64 → glob（类型 + 函数调用） ---
+        ("glob64_t", "glob_t"),
         ("glob64(path, flags, errfunc, pg)", "glob(path, flags, errfunc, pg)"),
         ("globfree64(p)", "globfree(p)"),
         # --- alphasort64/scandir64 → alphasort/scandir（不可用 #define，因 wrappedlibctypes.h 有同名成员） ---
