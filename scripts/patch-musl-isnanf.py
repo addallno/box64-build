@@ -745,14 +745,15 @@ def _inject_guard_in_file(path: str, guard: str) -> bool:
 
 
 def inject_wrappedlib_init_h(root: str, include_dir: str = None):
-    """在 wrappedlib_init.h 的 include guard 后注入 glibc_missing_symbols.h，
-    使 64-bit wrappedXXX.c 编译时符号已声明。
-    32-bit wrappedlib_init32.h 不注入（32-bit 路径用 implicit declaration 机制）。"""
+    """在 wrappedlib_init.h 和 wrappedlib_init32.h 的 include guard 后注入
+    glibc_missing_symbols.h，使所有 wrappedXXX.c 编译时符号已声明。"""
     if not include_dir:
         return
     guard = '#include "glibc_missing_symbols.h"'
     init_h = os.path.join(root, "src", "wrapped", "wrappedlib_init.h")
+    init32_h = os.path.join(root, "src", "wrapped32", "wrappedlib_init32.h")
     _inject_guard_in_file(init_h, guard)
+    _inject_guard_in_file(init32_h, guard)
 
 
 # ---- wrappedldlinux.c 专项：移除与 glibc_missing_symbols.h 冲突的本地 extern 声明 ----
@@ -854,9 +855,6 @@ for dirpath, _dirs, files in os.walk(os.path.join(root, "src")):
             n += m
         if fn == "wrappedldlinux.c" and "wrapped32" not in path:
             new, m = patch_wrappedldlinux_c(new)
-            n += m
-        if fn == "wrappedldlinux.c" and "wrapped32" in path:
-            new, m = patch_wrapped32_ldlinux_c(new)
             n += m
         if n:
             with open(path, "w", encoding="utf-8") as f:

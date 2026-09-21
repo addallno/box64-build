@@ -264,7 +264,7 @@ def parse_private_refs(priv_path: str) -> tuple:
         m = _PRIV_MACRO2_RE.match(t)
         if m:
             o = m.group(4)
-            if not o.startswith("my_"):
+            if not o.startswith("my_") and not o.startswith("my32_"):
                 func_refs[o] = m.group(1)
             continue
         m = _PRIV_MACRO_RE.match(t)
