@@ -600,7 +600,8 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
         "__sigaddset", "__sigismember", "__sigdelset",
         "__mbsnrtowcs_chk", "__mbsrtowcs_chk",
         "__wcrtomb_chk", "__wcsrtombs_chk",
-        "readdir64", "readdir64_r",  # musl 无 LFS64 目录遍历，implicit declaration 足够
+        # readdir64/readdir64_r: 由 patch_text 替换 readdir64( → readdir(，
+        # smart 路径在 header 中声明正确签名（&readdir64 在 GO 宏中需要）
         "cfree", "tfind", "tsearch", "tdestroy", "twalk",
         "prlimit64",
         "eventfd", "eventfd_read", "eventfd_write",
@@ -654,7 +655,7 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
         "aio_error", "aio_fsync", "aio_return", "aio_suspend",
         # GCC 内建函数 / musl _l 后缀宏：extern void 声明会冲突
         "strfmon", "strfmon_l",
-        "roundeven", "roundevenf",  # 安全网：可能在 musl_syms 但不在 decls
+        # roundeven/roundevenf: smart 路径提供 stub 签名
         "__strtold_l", "__strtod_l", "__strtol_l", "__strtoll_l",
         "__strtoul_l", "__strtoull_l", "__wcstol_l", "__wcstoll_l",
         "__wcstoul_l", "__wcstoull_l", "__wcstod_l", "__wcstof_l",

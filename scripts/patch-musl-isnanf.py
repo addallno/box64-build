@@ -27,6 +27,9 @@ REPL = {  # 优先匹配更长的 f 变体
     # glibc 专属的 64 位类型别名，musl 用 ino_t/off_t（本就 64 位），语义等价
     "ino64_t": "ino_t",
     "off64_t": "off_t",
+    # musl 无 LFS64 目录遍历，readdir64 → readdir（musl 本就 64 位）
+    "readdir64(": "readdir(",
+    "readdir64_r(": "readdir_r(",
     # glibc 内部类型别名，musl 用同名公共类型（布局一致）
     "__sigset_t": "sigset_t",
     # glibc 的 _NP 初始化宏 → 无后缀占位（musl 无 ERRORCHECK/RECURSIVE 静态初始化宏，
