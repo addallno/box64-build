@@ -378,6 +378,8 @@ def write_stub_headers(include_dir: str):
                 "/* musl 无 mmap64 声明（box64 在 custommmap.c 定义，mmap 是其 alias） */\n"
                 "#include <sys/mman.h>\n"
                 "#include <sys/types.h>\n"
+                "#include <sys/stat.h>\n"
+                "#include <sys/statfs.h>\n"
                 "#include <dirent.h>\n"
                 "void* mmap64(void* addr, unsigned long length, int prot, int flags, int fd, ssize_t offset);\n"
                 "/* musl 无 glibc 的 __compar_d_fn_t（qsort_r 回调类型），补齐以便 wrappedlibc.c 编译 */\n"
@@ -387,10 +389,13 @@ def write_stub_headers(include_dir: str):
                 "const int** __ctype_toupper_loc(void);\n"
                 "const int** __ctype_tolower_loc(void);\n"
                 "/* musl 无 glibc 的 struct mallinfo（box64 只用它 memset，不需字段对齐语义） */\n"
+                "#ifndef _STRUCT_MALLINFO\n"
+                "#define _STRUCT_MALLINFO\n"
                 "struct mallinfo {\n"
                 "  int arena; int ordblks; int smblks; int hblks; int hblkhd;\n"
                 "  int usmblks; int fsmblks; int uordblks; int fordblks; int keepcost;\n"
                 "};\n"
+                "#endif\n"
                 "/* musl 无 scandirat（box64 的 my_scandirat 需要），补声明（实现注入 scandirat.c） */\n"
                 "int scandirat(int dirfd, const char *path, struct dirent ***res,\n"
                 "              int (*sel)(const struct dirent *),\n"
@@ -401,6 +406,30 @@ def write_stub_headers(include_dir: str):
                 "#endif\n"
                 "#ifndef RTLD_DL_LINKMAP\n"
                 "#define RTLD_DL_LINKMAP 2\n"
+                "#endif\n"
+                "/* === LFS64 兼容层（musl 无 LFS64，off_t/ino_t 本就 64 位） === */\n"
+                "typedef struct stat struct stat64;\n"
+                "typedef struct statfs struct statfs64;\n"
+                "typedef struct dirent struct dirent64;\n"
+                "#include <glob.h>\n"
+                "typedef glob_t glob64_t;\n"
+                "#define alphasort64 alphasort\n"
+                "#define glob64 glob\n"
+                "#define globfree64 globfree\n"
+                "#ifndef GLOB_ALTDIRFUNC\n"
+                "#define GLOB_ALTDIRFUNC (1 << 4)\n"
+                "#endif\n"
+                "/* musl 的 glob_t 无 gl_flags 成员（glibc 有），用 gl_offs 兜底 */\n"
+                "#ifndef GLOB_ALTDIRFUNC_DEFINED\n"
+                "#define GLOB_ALTDIRFUNC_DEFINED\n"
+                "#ifdef __linux__\n"
+                "/* 如果 gl_flags 不存在，定义一个占位宏 */\n"
+                "#define GL_FLAGS_WORKAROUND 1\n"
+                "#endif\n"
+                "#endif\n"
+                "/* musl 无 __NFDBITS（glibc 内部宏），NFDBITS 等价 */\n"
+                "#ifndef __NFDBITS\n"
+                "#define __NFDBITS NFDBITS\n"
                 "#endif\n"
                 "#endif /* _MMAP64_H_ */\n"
             )
@@ -488,9 +517,16 @@ def patch_wrapped32_libc_c(s: str):
     """
     count = 0
     pairs = [
+        # --- stat64 → stat 类型和函数调用 ---
         ("const struct stat64 *st64", "const struct stat *st64"),
         ("    struct stat64 s = {0};\n", "    struct stat s = {0};\n"),
         ("    struct stat64 st;\n", "    struct stat st;\n"),
+        ("    struct  stat64 st;\n", "    struct stat st;\n"),
+        ("    struct stat64* p", "    struct stat* p"),
+        ("int ret = fstatat64(fd, name, p, flags);", "int ret = fstatat(fd, name, p, flags);"),
+        ("int ret = stat64(f, p);", "int ret = stat(f, p);"),
+        ("int ret = lstat64(f, p);", "int ret = lstat(f, p);"),
+        ("int ret = fstat64(fd, p);", "int ret = fstat(fd, p);"),
         ("    int ret = fstatat64(fd, name, buff?&s:NULL, flags);\n",
          "    int ret = fstatat(fd, name, buff?&s:NULL, flags);\n"),
         ("    int ret = stat64(f, r?&s:NULL);\n", "    int ret = stat(f, r?&s:NULL);\n"),
@@ -502,8 +538,15 @@ def patch_wrapped32_libc_c(s: str):
         ("    int r = stat64((const char*)path, &st);\n", "    int r = stat((const char*)path, &st);\n"),
         ("    int r = lstat64((const char*)name, &st);\n", "    int r = lstat((const char*)name, &st);\n"),
         ("    int r = fstatat64(d, path, &st, flags);\n", "    int r = fstatat(d, path, &st, flags);\n"),
+        # --- statfs64 → statfs（struct statfs64 由 mmap64.h typedef 提供，但函数调用需替换） ---
+        ("statfs64(path, &st)", "statfs(path, &st)"),
+        ("fstatfs64(fd, &st)", "fstatfs(fd, &st)"),
+        # --- glob: musl 的 glob_t 无 gl_flags 成员 ---
+        ("dst->gl_flags = src->gl_flags;\n", "/* musl glob_t 无 gl_flags，跳过 */\n"),
+        # --- posix_spawn: musl 的 posix_spawn_file_actions_t 无 __allocated/__used ---
+        ("dst->__allocated = src->__allocated;\n", "/* musl posix_spawn_file_actions_t 无 __allocated，跳过 */\n"),
+        ("dst->__used = src->__used;\n", "/* musl posix_spawn_file_actions_t 无 __used，跳过 */\n"),
     ]
-    count = 0
     for old, new in pairs:
         if old in s:
             s = s.replace(old, new)
