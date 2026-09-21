@@ -28,27 +28,14 @@ REPL = {  # 优先匹配更长的 f 变体
     "ino64_t": "ino_t",
     "off64_t": "off_t",
     # musl 无 LFS64 目录遍历，readdir64 → readdir（musl 本就 64 位）
-    "readdir64_r": "readdir_r",
-    "readdir64": "readdir",
+    "readdir64(": "readdir(",
+    "readdir64_r(": "readdir_r(",
     # glibc 内部类型别名，musl 用同名公共类型（布局一致）
     "__sigset_t": "sigset_t",
     # glibc 的 _NP 初始化宏 → 无后缀占位（musl 无 ERRORCHECK/RECURSIVE 静态初始化宏，
     # 实际值由 build 脚本 CFLAGS 注入，见 PTHREAD_MUTEX_INITIALIZER_* 定义）
     "PTHREAD_ERRORCHECK_MUTEX_INITIALIZER_NP": "PTHREAD_ERRORCHECK_MUTEX_INITIALIZER",
     "PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP": "PTHREAD_RECURSIVE_MUTEX_INITIALIZER",
-    # LFS64 兼容（musl 无 LFS64，off_t/ino_t 本就 64 位，\b 词边界安全匹配）
-    "fstatat64": "fstatat",
-    "fstatfs64": "fstatfs",
-    "alphasort64": "alphasort",
-    "scandir64": "scandir",
-    "globfree64": "globfree",
-    "glob64_t": "glob_t",
-    "glob64": "glob",
-    "statfs64": "statfs",
-    "fstat64": "fstat",
-    "lstat64": "lstat",
-    "stat64": "stat",
-    "dirent64": "dirent",
 }
 
 # musl 无 glibc 的 mallopt/M_ARENA_*，从 os_linux.c 注释该调优块
