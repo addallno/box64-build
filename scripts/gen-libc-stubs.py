@@ -660,6 +660,12 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
         "__strtoul_l", "__strtoull_l", "__wcstol_l", "__wcstoll_l",
         "__wcstoul_l", "__wcstoull_l", "__wcstod_l", "__wcstof_l",
         "__wcstold_l",
+        # LFS64 兼容：由 mmap64.h 的 #define 宏提供（stat64→stat 等），避免 header 声明冲突
+        "stat64", "lstat64", "fstat64", "fstatat64",
+        "statfs64", "fstatfs64",
+        "readdir64", "readdir64_r",
+        "glob64", "globfree64", "glob64_t",
+        "alphasort64", "scandir64",
     }
     for name in sorted(func_refs):
         # 前置跳过：musl 已知声明/内联/宏（优先级最高，避免与 smart 路径冲突）
