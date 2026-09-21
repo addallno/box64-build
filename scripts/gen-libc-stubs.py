@@ -722,6 +722,9 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
         "signgam",
         "__res_state",
         "__libc_enable_secure",  # wrapped32/wrappedlibc.c 定义为 int，与 unsigned char[4] 冲突
+        "__stack_chk_guard",     # wrappedldlinux.c 声明为 extern void*
+        "__libc_stack_end",      # wrappedldlinux.c 声明为 extern void*
+        "__pointer_chk_guard",   # wrappedldlinux.c 声明为 extern void*
     }
     for name in sorted(data_refs):
         # musl 头文件已声明的数据 → 跳过
