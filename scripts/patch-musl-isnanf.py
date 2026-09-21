@@ -777,6 +777,28 @@ def patch_wrappedldlinux_c(s: str):
     return s, count
 
 
+# ---- wrapped32/wrappedldlinux.c 专项：注入 DATA 符号声明 ----
+# wrapped32/wrappedldlinux_private.h 的 DATA 宏用 &(void*)&N 取地址，
+# 需要符号声明。注入到 #include "wrappedlib_init32.h" 之前。
+WRAPPED32_LDLINUX_DATA_DECLS = """\
+extern int __libc_enable_secure;
+extern int __libc_stack_end;
+extern int __pointer_chk_guard;
+extern int _rtld_global;
+extern int _rtld_global_ro;
+extern int __stack_chk_guard;
+"""
+
+
+def patch_wrapped32_ldlinux_c(s: str):
+    """wrapped32/wrappedldlinux.c：在 wrappedlib_init32.h 之前注入 DATA 符号声明。"""
+    marker = '#include "wrappedlib_init32.h"'
+    if marker in s and "__libc_enable_secure" not in s.split(marker)[0]:
+        s = s.replace(marker, WRAPPED32_LDLINUX_DATA_DECLS + "\n" + marker, 1)
+        return s, 1
+    return s, 0
+
+
 root = sys.argv[1]
 include_dir = sys.argv[2] if len(sys.argv) > 2 else None
 
@@ -832,6 +854,9 @@ for dirpath, _dirs, files in os.walk(os.path.join(root, "src")):
             n += m
         if fn == "wrappedldlinux.c" and "wrapped32" not in path:
             new, m = patch_wrappedldlinux_c(new)
+            n += m
+        if fn == "wrappedldlinux.c" and "wrapped32" in path:
+            new, m = patch_wrapped32_ldlinux_c(new)
             n += m
         if n:
             with open(path, "w", encoding="utf-8") as f:
