@@ -717,35 +717,45 @@ def inject_missing_symbols(root: str):
         print("CMakeLists.txt: 已把 glibc_missing_symbols.c 加入无条件 ELFLOADER_SRC")
 
 
+def _inject_guard_in_file(path: str, guard: str) -> bool:
+    """在文件的 #endif（LIBNAME guard）后、#include "debug.h" 前注入 guard。
+    返回是否成功注入。"""
+    if not os.path.exists(path):
+        return False
+    with open(path, "r", encoding="utf-8") as f:
+        s = f.read()
+    if guard in s:
+        print(f"{os.path.basename(path)}: glibc_missing_symbols.h 已注入")
+        return True
+    for anchor in ['#endif\n\n#include "debug.h"',
+                   '#endif\n#include "debug.h"']:
+        if anchor in s:
+            s = s.replace(anchor, '#endif\n\n' + guard + '\n\n#include "debug.h"', 1)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(s)
+            print(f"{os.path.basename(path)}: 已注入 {guard}")
+            return True
+    # 兜底：在文件开头 SPDX 注释后插入
+    s = s.replace('// SPDX-License-Identifier: MIT\n',
+                   '// SPDX-License-Identifier: MIT\n' + guard + '\n', 1)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(s)
+    print(f"{os.path.basename(path)}: 已注入（兜底）{guard}")
+    return True
+
+
 def inject_wrappedlib_init_h(root: str, include_dir: str = None):
-    """在 wrappedlib_init.h 的 include guard 后注入 glibc_missing_symbols.h，
-    使 STATICBUILD 下 GO(N,W) → {#N, W, 0, &N} 宏展开时所有符号已声明。
-    注入点：#endif（LIBNAME guard）之后、#include "debug.h" 之前。"""
+    """在 wrappedlib_init.h 和 wrappedlib_init32.h 的 include guard 后注入
+    glibc_missing_symbols.h，使所有 wrappedXXX.c 编译时符号已声明。"""
     if not include_dir:
         return
-    init_h = os.path.join(root, "src", "wrapped", "wrappedlib_init.h")
-    if not os.path.exists(init_h):
-        print(f"跳过 wrappedlib_init.h（不存在: {init_h}）")
-        return
-    with open(init_h, "r", encoding="utf-8") as f:
-        s = f.read()
     guard = '#include "glibc_missing_symbols.h"'
-    if guard in s:
-        print("wrappedlib_init.h: glibc_missing_symbols.h 已注入")
-        return
-    anchor = '#endif\n\n#include "debug.h"'
-    if anchor not in s:
-        # 尝试不带双换行的版本
-        anchor = '#endif\n#include "debug.h"'
-    if anchor in s:
-        s = s.replace(anchor, '#endif\n\n' + guard + '\n\n#include "debug.h"', 1)
-    else:
-        # 兜底：在文件开头 SPDX 注释后插入
-        s = s.replace('// SPDX-License-Identifier: MIT\n',
-                       '// SPDX-License-Identifier: MIT\n' + guard + '\n', 1)
-    with open(init_h, "w", encoding="utf-8") as f:
-        f.write(s)
-    print(f"wrappedlib_init.h: 已注入 {guard}")
+    # 64-bit init
+    init_h = os.path.join(root, "src", "wrapped", "wrappedlib_init.h")
+    _inject_guard_in_file(init_h, guard)
+    # 32-bit init
+    init32_h = os.path.join(root, "src", "wrapped32", "wrappedlib_init32.h")
+    _inject_guard_in_file(init32_h, guard)
 
 
 # ---- wrappedldlinux.c 专项：移除与 glibc_missing_symbols.h 冲突的本地 extern 声明 ----
