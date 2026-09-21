@@ -501,6 +501,19 @@ def generate_stubs(missing_funcs, missing_datas, sigs, smart, out_path):
     if undefs:
         lines.append("/* 屏蔽 musl <math.h> 等头文件中的宏定义，避免与 stub 定义冲突 */")
         lines.append(undefs)
+    # 屏蔽 mmap64.h 中的 LFS64 宏（#define stat64 stat 等），防止 stub 函数名被展开
+    lfs64_macros = [
+        "stat64", "lstat64", "fstat64", "fstatat64",
+        "statfs64", "fstatfs64",
+        "dirent64", "readdir64", "readdir64_r",
+        "glob64", "globfree64", "glob64_t",
+        "alphasort64", "scandir64",
+    ]
+    lines.append("/* 屏蔽 mmap64.h 中的 LFS64 宏定义（#define stat64 stat 等），避免 stub 函数名被展开 */")
+    for m in lfs64_macros:
+        lines.append(f"#ifdef {m}")
+        lines.append(f"#undef {m}")
+        lines.append("#endif")
     lines.append("/* ================= 函数 stub ================= */")
     for name in sorted(missing_funcs):
         if name in smart:
