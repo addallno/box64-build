@@ -237,7 +237,7 @@ _PRIV_MACRO_RE = re.compile(
     r"^(GOD|GOWD|GO|GOW)\(([A-Za-z_]\w*),")
 _PRIV_MACRO2_RE = re.compile(
     r"^(GO2|GOW2|GOD|GOWD)\(([A-Za-z_]\w*),([^,]+),\s*([A-Za-z_]\w*)\)")
-_PRIV_DATA_RE = re.compile(r"^(DATA|DATAB|DATAV)\(([A-Za-z_]\w*),\s*(\d+)\)")
+_PRIV_DATA_RE = re.compile(r"^(DATA|DATAB|DATAV)\(([A-Za-z_]\w*),\s*([^)]+)\)")
 
 
 def parse_private_refs(priv_path: str) -> tuple:
@@ -255,7 +255,11 @@ def parse_private_refs(priv_path: str) -> tuple:
             continue
         m = _PRIV_DATA_RE.match(t)
         if m:
-            data_refs[m.group(2)] = (int(m.group(3)), m.group(1))
+            try:
+                sz = int(m.group(3))
+            except ValueError:
+                sz = 256  # sizeof(...) 等非数字大小，默认 256
+            data_refs[m.group(2)] = (sz, m.group(1))
             continue
         m = _PRIV_MACRO2_RE.match(t)
         if m:
@@ -715,8 +719,6 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
         "_nl_msg_cat_cntr", "__check_rhosts_file",
         "signgam",
         "__res_state",
-        # wrappedldlinux.c 自己声明了 extern void*，与 header 的 unsigned char[4] 冲突
-        "__libc_enable_secure", "__stack_chk_guard",
     }
     for name in sorted(data_refs):
         # musl 头文件已声明的数据 → 跳过
