@@ -409,9 +409,16 @@ def write_stub_headers(include_dir: str):
                 "#ifndef __NFDBITS\n"
                 "#define __NFDBITS NFDBITS\n"
                 "#endif\n"
+                "/* musl 无 GLOB_ALTDIRFUNC（glibc 扩展），回退定义 */\n"
+                "#ifndef GLOB_ALTDIRFUNC\n"
+                "#define GLOB_ALTDIRFUNC (1 << 8)\n"
+                "#endif\n"
+                "/* musl 无 struct rlimit64（rlim_t 本就 64 位），定义为 struct rlimit */\n"
+                "#define rlimit64 rlimit\n"
+                "/* musl 无 sys/vfs.h（用 sys/statfs.h 代替），提供兼容 include */\n"
+                "#include <sys/statfs.h>\n"
                 "/* LFS64 头文件：提供 struct statfs、glob_t、GLOB_ALTDIRFUNC 等\n"
                 "   （不加 #define 宏，避免干扰 glibc_missing_symbols.c 的 extern 声明）*/\n"
-                "#include <sys/statfs.h>\n"
                 "#include <glob.h>\n"
                 "#endif /* _MMAP64_H_ */\n"
             )
@@ -531,10 +538,12 @@ def patch_wrapped32_libc_c(s: str):
         ("glob64(path, flags, errfunc, pg)", "glob(path, flags, errfunc, pg)"),
         ("globfree64(p)", "globfree(p)"),
         # --- alphasort64/scandir64 → alphasort/scandir（不可用 #define，因 wrappedlibctypes.h 有同名成员） ---
-        ("alphasort64", "alphasort"),
-        ("scandir64", "scandir"),
+        ("alphasort64(d, list)", "alphasort(d, list)"),
+        ("scandir64(dir, &list", "scandir(dir, &list"),
         # --- glob: musl 的 glob_t 无 gl_flags 成员 ---
         ("dst->gl_flags = src->gl_flags;\n", "/* musl glob_t 无 gl_flags，跳过 */\n"),
+        # --- struct mallinfo 重定义保护：mmap64.h 已定义 ---
+        ("#ifndef ANDROID\nstruct mallinfo {", "#if !defined(_MALLINFO_DEFINED) && !defined(ANDROID)\n#define _MALLINFO_DEFINED\nstruct mallinfo {"),
         # --- posix_spawn: musl 的 posix_spawn_file_actions_t 无 __allocated/__used ---
         ("dst->__allocated = src->__allocated;\n", "/* musl posix_spawn_file_actions_t 无 __allocated，跳过 */\n"),
         ("dst->__used = src->__used;\n", "/* musl posix_spawn_file_actions_t 无 __used，跳过 */\n"),
