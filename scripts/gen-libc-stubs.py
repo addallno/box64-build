@@ -720,7 +720,6 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
         "_nl_msg_cat_cntr", "__check_rhosts_file",
         "signgam",
         "__res_state",
-        "__libc_enable_secure",  # wrappedldlinux.c 声明为 extern void*，与 DATA unsigned char[] 冲突
     }
     for name in sorted(data_refs):
         # musl 头文件已声明的数据 → 跳过
