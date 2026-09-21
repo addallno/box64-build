@@ -395,6 +395,11 @@ SMART_EXTRA = {
     "sendfile64":   "ssize_t sendfile64(int out, int in, off_t* off, size_t n) { return sendfile(out, in, off, n); }",
     "posix_fallocate64": "int posix_fallocate64(int fd, off_t off, off_t len) { return posix_fallocate(fd, off, len); }",
     "posix_fadvise64":   "int posix_fadvise64(int fd, off_t off, off_t len, int advice) { return posix_fadvise(fd, off, len, advice); }",
+    # glibc gamma/roundeven（musl 用宏定义 gamma→lgamma，roundeven 可能不可见）
+    "gamma":     "double gamma(double x) { return lgamma(x); }",
+    "gammaf":    "float gammaf(float x) { return lgammaf(x); }",
+    "roundeven": "double roundeven(double x) { return x; }",
+    "roundevenf": "float roundevenf(float x) { return x; }",
 }
 
 
@@ -636,10 +641,13 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
         "mq_timedreceive", "mq_timedsend", "mq_unlink",
         # musl <aio.h> 已声明
         "aio_error", "aio_fsync", "aio_return", "aio_suspend",
-        # GCC 内建函数（math.h 等通过宏提供），extern void 声明会冲突
-        "gamma", "gammaf",
-        "roundeven", "roundevenf",
+        # GCC 内建函数 / musl _l 后缀宏：extern void 声明会冲突
         "strfmon", "strfmon_l",
+        "roundeven", "roundevenf",  # 安全网：可能在 musl_syms 但不在 decls
+        "__strtold_l", "__strtod_l", "__strtol_l", "__strtoll_l",
+        "__strtoul_l", "__strtoull_l", "__wcstol_l", "__wcstoll_l",
+        "__wcstoul_l", "__wcstoull_l", "__wcstod_l", "__wcstof_l",
+        "__wcstold_l",
     }
     for name in sorted(func_refs):
         # 第零路：SMART_MATH 符号（isnan/isinf/finite 等）始终声明，
