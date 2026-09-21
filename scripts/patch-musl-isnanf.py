@@ -28,14 +28,27 @@ REPL = {  # 优先匹配更长的 f 变体
     "ino64_t": "ino_t",
     "off64_t": "off_t",
     # musl 无 LFS64 目录遍历，readdir64 → readdir（musl 本就 64 位）
-    "readdir64(": "readdir(",
-    "readdir64_r(": "readdir_r(",
+    "readdir64_r": "readdir_r",
+    "readdir64": "readdir",
     # glibc 内部类型别名，musl 用同名公共类型（布局一致）
     "__sigset_t": "sigset_t",
     # glibc 的 _NP 初始化宏 → 无后缀占位（musl 无 ERRORCHECK/RECURSIVE 静态初始化宏，
     # 实际值由 build 脚本 CFLAGS 注入，见 PTHREAD_MUTEX_INITIALIZER_* 定义）
     "PTHREAD_ERRORCHECK_MUTEX_INITIALIZER_NP": "PTHREAD_ERRORCHECK_MUTEX_INITIALIZER",
     "PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP": "PTHREAD_RECURSIVE_MUTEX_INITIALIZER",
+    # LFS64 兼容（musl 无 LFS64，off_t/ino_t 本就 64 位，\b 词边界安全匹配）
+    "fstatat64": "fstatat",
+    "fstatfs64": "fstatfs",
+    "alphasort64": "alphasort",
+    "scandir64": "scandir",
+    "globfree64": "globfree",
+    "glob64_t": "glob_t",
+    "glob64": "glob",
+    "statfs64": "statfs",
+    "fstat64": "fstat",
+    "lstat64": "lstat",
+    "stat64": "stat",
+    "dirent64": "dirent",
 }
 
 # musl 无 glibc 的 mallopt/M_ARENA_*，从 os_linux.c 注释该调优块
@@ -386,8 +399,14 @@ def write_stub_headers(include_dir: str):
                 "const unsigned short** __ctype_b_loc(void);\n"
                 "const int** __ctype_toupper_loc(void);\n"
                 "const int** __ctype_tolower_loc(void);\n"
-                "/* musl 的 <malloc.h> 已提供 struct mallinfo，包含即可 */\n"
-                "#include <malloc.h>\n"
+                "/* musl 无 glibc 的 struct mallinfo（box64 只用它 memset，不需字段对齐语义） */\n"
+                "#ifndef _MALLINFO_DEFINED\n"
+                "#define _MALLINFO_DEFINED\n"
+                "struct mallinfo {\n"
+                "  int arena; int ordblks; int smblks; int hblks; int hblkhd;\n"
+                "  int usmblks; int fsmblks; int uordblks; int fordblks; int keepcost;\n"
+                "};\n"
+                "#endif\n"
                 "/* musl 无 scandirat（box64 的 my_scandirat 需要），补声明（实现注入 scandirat.c） */\n"
                 "int scandirat(int dirfd, const char *path, struct dirent ***res,\n"
                 "              int (*sel)(const struct dirent *),\n"
@@ -398,30 +417,6 @@ def write_stub_headers(include_dir: str):
                 "#endif\n"
                 "#ifndef RTLD_DL_LINKMAP\n"
                 "#define RTLD_DL_LINKMAP 2\n"
-                "#endif\n"
-                "/* === LFS64 兼容层（musl 无 LFS64，off_t/ino_t 本就 64 位） === */\n"
-                "#ifndef stat64\n"
-                "#define stat64 stat\n"
-                "#endif\n"
-                "#ifndef statfs64\n"
-                "#define statfs64 statfs\n"
-                "#endif\n"
-                "#ifndef dirent64\n"
-                "#define dirent64 dirent\n"
-                "#endif\n"
-                "#include <glob.h>\n"
-                "#ifndef glob64\n"
-                "#define glob64 glob\n"
-                "#endif\n"
-                "#ifndef glob64_t\n"
-                "#define glob64_t glob_t\n"
-                "#endif\n"
-                "#ifndef globfree64\n"
-                "#define globfree64 globfree\n"
-                "#endif\n"
-                "#define alphasort64 alphasort\n"
-                "#ifndef GLOB_ALTDIRFUNC\n"
-                "#define GLOB_ALTDIRFUNC (1 << 4)\n"
                 "#endif\n"
                 "/* musl 无 __NFDBITS（glibc 内部宏），NFDBITS 等价 */\n"
                 "#ifndef __NFDBITS\n"
