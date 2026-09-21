@@ -856,9 +856,6 @@ for dirpath, _dirs, files in os.walk(os.path.join(root, "src")):
             else:
                 new, m = patch_wrappedlibc_c(new)
             n += m
-        if fn == "wrappedldlinux.c" and "wrapped32" not in path:
-            new, m = patch_wrappedldlinux_c(new)
-            n += m
         if n:
             with open(path, "w", encoding="utf-8") as f:
                 f.write(new)
