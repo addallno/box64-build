@@ -636,6 +636,10 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
         "mq_timedreceive", "mq_timedsend", "mq_unlink",
         # musl <aio.h> 已声明
         "aio_error", "aio_fsync", "aio_return", "aio_suspend",
+        # GCC 内建函数（math.h 等通过宏提供），extern void 声明会冲突
+        "gamma", "gammaf",
+        "roundeven", "roundevenf",
+        "strfmon", "strfmon_l",
     }
     for name in sorted(func_refs):
         # 第零路：SMART_MATH 符号（isnan/isinf/finite 等）始终声明，
@@ -697,6 +701,8 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
         "_nl_msg_cat_cntr", "__check_rhosts_file",
         "signgam",
         "__res_state",
+        # wrappedldlinux.c 自己声明了 extern void*，与 header 的 unsigned char[4] 冲突
+        "__libc_enable_secure", "__stack_chk_guard",
     }
     for name in sorted(data_refs):
         # musl 头文件已声明的数据 → 跳过
