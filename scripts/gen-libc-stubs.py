@@ -237,8 +237,8 @@ _PRIV_MACRO_RE = re.compile(
     r"^(GOD|GOWD|GO|GOW)\(([A-Za-z_]\w*),")
 _PRIV_MACRO2_RE = re.compile(
     r"^(GO2|GOW2|GOD|GOWD)\(([A-Za-z_]\w*),([^,]+),\s*([A-Za-z_]\w*)\)")
-_PRIV_GOM_RE = re.compile(
-    r"^(GOM|GOWM|DATAM)\(([A-Za-z_]\w*)")
+_PRIV_GOM_RE = re.compile(r"^(GOM|GOWM)\(([A-Za-z_]\w*)")
+_PRIV_DATAM_RE = re.compile(r"^(DATAM)\(([A-Za-z_]\w*),\s*([^)]+)\)")
 _PRIV_DATA_RE = re.compile(r"^(DATA|DATAB|DATAV)\(([A-Za-z_]\w*),\s*([^)]+)\)")
 
 
@@ -255,7 +255,8 @@ def parse_private_refs(priv_path: str) -> tuple:
         t = line.strip()
         if not t or t.startswith("//"):
             continue
-        m = _PRIV_DATA_RE.match(t)
+        # DATA/DATAB/DATAV/DATAM: 数据符号（DATAM 含 my32 映射，但本体仍是数据）
+        m = _PRIV_DATA_RE.match(t) or _PRIV_DATAM_RE.match(t)
         if m:
             try:
                 sz = int(m.group(3))
@@ -263,7 +264,7 @@ def parse_private_refs(priv_path: str) -> tuple:
                 sz = 256  # sizeof(...) 等非数字大小，默认 256
             data_refs[m.group(2)] = (sz, m.group(1))
             continue
-        # GOM/GOWM/DATAM: 收集原始名称和 my32_ 映射名称
+        # GOM/GOWM: 函数符号，收集原始名称和 my32_ 映射名称
         m = _PRIV_GOM_RE.match(t)
         if m:
             n = m.group(2)
@@ -725,6 +726,31 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
     slc_syms = static_libc_syms or set()
     musl_all = set(musl_syms) if musl_syms else set()
 
+    # musl 头文件中已声明的全局数据符号（即使提取失败也要跳过）
+    # 提前定义：函数段也需跳过这些符号（避免与 injected extern int / DATA 声明冲突）
+    _MUSL_KNOWN_DATA = {
+        "daylight", "timezone", "tzname",
+        "optarg", "opterr", "optind", "optopt",
+        "stdin", "stdout", "stderr",
+        "environ", "errno",
+        "_IO_2_1_stdin_", "_IO_2_1_stdout_", "_IO_2_1_stderr_",
+        "_IO_file_jumps", "_IO_list_all",
+        "__progname", "__progname_full",
+        "_sys_siglist", "sys_siglist",
+        "_nl_msg_cat_cntr", "__check_rhosts_file",
+        "signgam",
+        "__res_state",
+        "__libc_enable_secure",  # wrapped32/wrappedlibc.c 定义为 int，与 unsigned char[4] 冲突
+        "__stack_chk_guard",     # wrappedldlinux.c 声明为 extern void*
+        "__libc_stack_end",      # wrappedldlinux.c 声明为 extern void*
+        "__pointer_chk_guard",   # wrappedldlinux.c 声明为 extern void*
+        "_rtld_global",          # wrapped32/wrappedldlinux.c 由 patch 注入 extern int 声明
+        "_rtld_global_ro",       # wrapped32/wrappedldlinux.c 由 patch 注入 extern int 声明
+        "__ctype_b",             # musl <ctype.h> 宏 → (*__ctype_b_loc())
+        "__timezone",            # musl <time.h> extern long timezone
+        "_r_debug",              # musl 内部，某些头文件可能声明
+    }
+
     # 过滤 dummy_* 假符号（wrappedlibc_private.h 中的特殊条目，非真实 C 函数）
     # 过滤 my_* 和 my32_* 符号（box64 wrapper 函数，定义在各自 .c 文件中，不应出现在 header 中）
     func_refs = {n for n in func_refs if not n.startswith("dummy_") and not n.startswith("my_") and not n.startswith("my32_")}
@@ -832,6 +858,9 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
         "__wcstold_l",
     }
     for name in sorted(func_refs):
+        # 数据符号 / 已知 DATA 符号不在函数段声明（避免 redeclared as different kind）
+        if name in data_refs or name in _MUSL_KNOWN_DATA:
+            continue
         # 前置跳过：musl 已知声明/内联/宏（优先级最高，避免与 smart 路径冲突）
         if name in _KNOWN_MUSL_DECLS:
             continue
@@ -884,29 +913,6 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
 
     lines.append("")
     lines.append("/* ================= 数据声明 ================= */")
-    # musl 头文件中已声明的全局数据符号（即使提取失败也要跳过）
-    _MUSL_KNOWN_DATA = {
-        "daylight", "timezone", "tzname",
-        "optarg", "opterr", "optind", "optopt",
-        "stdin", "stdout", "stderr",
-        "environ", "errno",
-        "_IO_2_1_stdin_", "_IO_2_1_stdout_", "_IO_2_1_stderr_",
-        "_IO_file_jumps", "_IO_list_all",
-        "__progname", "__progname_full",
-        "_sys_siglist", "sys_siglist",
-        "_nl_msg_cat_cntr", "__check_rhosts_file",
-        "signgam",
-        "__res_state",
-        "__libc_enable_secure",  # wrapped32/wrappedlibc.c 定义为 int，与 unsigned char[4] 冲突
-        "__stack_chk_guard",     # wrappedldlinux.c 声明为 extern void*
-        "__libc_stack_end",      # wrappedldlinux.c 声明为 extern void*
-        "__pointer_chk_guard",   # wrappedldlinux.c 声明为 extern void*
-        "_rtld_global",          # wrapped32/wrappedldlinux.c 由 patch 注入 extern int 声明
-        "_rtld_global_ro",       # wrapped32/wrappedldlinux.c 由 patch 注入 extern int 声明
-        "__ctype_b",             # musl <ctype.h> 宏 → (*__ctype_b_loc())
-        "__timezone",            # musl <time.h> extern long timezone
-        "_r_debug",              # musl 内部，某些头文件可能声明
-    }
     for name in sorted(data_refs):
         # musl 头文件已声明的数据 → 跳过
         if name in decls or name in macros:
