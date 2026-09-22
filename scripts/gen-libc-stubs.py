@@ -842,9 +842,11 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
             lines.append(f"#undef {name}")
             lines.append(f"#endif")
             undefed += 1
-        # 第四路：完全缺失的符号 → extern 声明
-        lines.append(f"extern void {name}(void);")
-        declared += 1
+        # 第四路：完全缺失的符号
+        # 不再生成 extern void(name)(void) 声明——.h 文件已 include 所有 musl 头文件，
+        # 这些头文件已声明了该符号的真实签名，重复声明会导致 conflicting types 错误。
+        # 对于真正缺失的符号（musl 头文件未声明），编译器会使用隐式声明（-Wno-implicit-function-declaration），
+        # GO 宏中的 &N 取地址仍然有效（链接到 glibc_missing_symbols.c 中的 weak stub）。
     print(f"[header] 函数: undef={undefed}, 声明={declared}, "
           f"跳过(static_libc)={skipped_slc}, "
           f"跳过(decls)={len(func_refs)-undefed-declared-skipped_slc}")
