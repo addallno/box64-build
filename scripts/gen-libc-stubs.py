@@ -787,7 +787,15 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
         "mq_receive", "mq_send", "mq_setattr",
         "mq_timedreceive", "mq_timedsend", "mq_unlink",
         # musl <aio.h> 已声明
-        "aio_error", "aio_fsync", "aio_return", "aio_suspend",
+        "aio_cancel", "aio_error", "aio_fsync", "aio_read", "aio_return",
+        "aio_suspend", "aio_write", "lio_listio",
+        # musl <dlfcn.h> 已声明
+        "dl_iterate_phdr", "dladdr", "dlclose", "dlerror", "dlinfo",
+        "dlopen", "dlsym",
+        # musl <ftw.h> 已声明
+        "ftw", "nftw",
+        # musl <mqueue.h> 已声明（补充遗漏）
+        "mq_notify",
         # GCC 内建函数 / musl _l 后缀宏：extern void 声明会冲突
         "strfmon", "strfmon_l",
         # roundeven/roundevenf: smart 路径提供 stub 签名
@@ -862,6 +870,9 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
         "__pointer_chk_guard",   # wrappedldlinux.c 声明为 extern void*
         "_rtld_global",          # wrapped32/wrappedldlinux.c 由 patch 注入 extern int 声明
         "_rtld_global_ro",       # wrapped32/wrappedldlinux.c 由 patch 注入 extern int 声明
+        "__ctype_b",             # musl <ctype.h> 宏 → (*__ctype_b_loc())
+        "__timezone",            # musl <time.h> extern long timezone
+        "_r_debug",              # musl 内部，某些头文件可能声明
     }
     for name in sorted(data_refs):
         # musl 头文件已声明的数据 → 跳过
