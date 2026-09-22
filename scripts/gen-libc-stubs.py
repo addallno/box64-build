@@ -305,7 +305,7 @@ def parse_static_libc_signatures(h_path: str) -> dict:
 
 
 def parse_static_libc_symbols(h_path: str) -> set:
-    """解析 static_libc.h 中所有已声明或定义的函数名（包括 extern 声明和内联函数体）。
+    """解析 static_libc.h 中所有已声明或定义的函数名（包括 extern 声明、static inline 和普通定义）。
 
     返回函数名集合；generate_header() 中跳过这些符号，避免与 static_libc.h 冲突。
     """
@@ -313,21 +313,24 @@ def parse_static_libc_symbols(h_path: str) -> set:
     # extern 声明: extern TYPE NAME(...)
     re_ext = re.compile(
         r"^\s*extern\s+\S+\s+(\w+)\s*\(")
-    # 内联函数定义: TYPE NAME(...) {
+    # 普通函数定义: TYPE NAME(...) {
     re_def = re.compile(
         r"^\s*\S+\s+(\w+)\s*\([^)]*\)\s*\{")
+    # static inline 函数: static inline TYPE NAME(...) {
+    re_static = re.compile(
+        r"^\s*static\s+inline\s+\S+\s+(\w+)\s*\(")
     for line in open(h_path, encoding="utf-8"):
+        m = re_static.match(line)
+        if m:
+            syms.add(m.group(1))
+            continue
         m = re_ext.match(line)
         if m:
-            name = m.group(1)
-            if not name.startswith("my_"):
-                syms.add(name)
+            syms.add(m.group(1))
             continue
         m = re_def.match(line)
         if m:
-            name = m.group(1)
-            if not name.startswith("my_"):
-                syms.add(name)
+            syms.add(m.group(1))
     return syms
 
 
@@ -695,14 +698,16 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
                     static_libc_syms=None):
     """生成 extern 声明头文件。
 
-    四路过滤策略（最小化与 musl/box64 头文件的类型冲突）:
-      1. static_libc_syms 中的符号 → 跳过（box64 static_libc.h 已声明/定义，
-         在 wrappedlibc.c 中先于本头文件被 include）
-      2. decls 中的符号 → 跳过（musl 头文件已有函数/类型声明）
-      3. macros 中的符号 → #undef 后 fallthrough 到声明
-      4. 完全缺失的符号 → extern 声明
+    五路过滤策略（最小化与 musl/box64 头文件的类型冲突）:
+      1. _KNOWN_MUSL_DECLS → 跳过
+      2. smart 路径 → 精确签名声明
+      3. static_libc_syms → 跳过（box64 static_libc.h 已声明/定义）
+      4. macros → #undef 后 fallthrough
+      5. 完全缺失 → extern void(name)(void)
 
-    数据同理：跳过 decls/macros、_MUSL_KNOWN_DATA 中的数据符号。
+    关键：decls 提取不完整（只有 2660 个），但 .h 文件 include 了所有 musl
+    头文件。因此额外使用 _KNOWN_MUSL_DECLS 和 _MUSL_KNOWN_DATA 手动覆盖
+    已知会冲突的符号。
     """
     lines = [_HEADER_DECL]
     undefs = _render_undefs(smart)
@@ -796,6 +801,13 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
         "ftw", "nftw",
         # musl <mqueue.h> 已声明（补充遗漏）
         "mq_notify",
+        # musl <err.h> 已声明
+        "error_at_line", "errx", "verr", "verrx", "vwarn", "vwarnx",
+        "warn", "warnx",
+        # musl <getopt.h> 已声明（通过 <unistd.h> 或其他头间接引入）
+        "getopt_long", "getopt_long_only",
+        # musl 内部实现 / __ 前缀变体
+        "__strtold_internal",
         # GCC 内建函数 / musl _l 后缀宏：extern void 声明会冲突
         "strfmon", "strfmon_l",
         # roundeven/roundevenf: smart 路径提供 stub 签名
@@ -842,11 +854,12 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
             lines.append(f"#undef {name}")
             lines.append(f"#endif")
             undefed += 1
-        # 第四路：完全缺失的符号
-        # 不再生成 extern void(name)(void) 声明——.h 文件已 include 所有 musl 头文件，
-        # 这些头文件已声明了该符号的真实签名，重复声明会导致 conflicting types 错误。
-        # 对于真正缺失的符号（musl 头文件未声明），编译器会使用隐式声明（-Wno-implicit-function-declaration），
-        # GO 宏中的 &N 取地址仍然有效（链接到 glibc_missing_symbols.c 中的 weak stub）。
+        # 第四路：完全缺失的符号 → extern 声明
+        # 仅当符号不在 decls 中时才生成（decls 来自 musl 头文件预处理提取）
+        # 同时检查 my_ 前缀（box64 wrapper 函数，由 static_libc.h 提供定义）
+        if name not in decls:
+            lines.append(f"extern void {name}(void);")
+            declared += 1
     print(f"[header] 函数: undef={undefed}, 声明={declared}, "
           f"跳过(static_libc)={skipped_slc}, "
           f"跳过(decls)={len(func_refs)-undefed-declared-skipped_slc}")

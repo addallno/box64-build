@@ -161,6 +161,11 @@ cat > /tmp/all_musl_headers.c << 'CEOF'
 #include <sys/klog.h>
 #include <sys/quota.h>
 #include <sys/reboot.h>
+#include <aio.h>
+#include <cpio.h>
+#include <ftw.h>
+#include <mqueue.h>
+#include <tar.h>
 CEOF
 echo "头文件数: $(grep -c '#include' /tmp/all_musl_headers.c)"
 
