@@ -237,6 +237,8 @@ _PRIV_MACRO_RE = re.compile(
     r"^(GOD|GOWD|GO|GOW)\(([A-Za-z_]\w*),")
 _PRIV_MACRO2_RE = re.compile(
     r"^(GO2|GOW2|GOD|GOWD)\(([A-Za-z_]\w*),([^,]+),\s*([A-Za-z_]\w*)\)")
+_PRIV_GOM_RE = re.compile(
+    r"^(GOM|GOWM|DATAM)\(([A-Za-z_]\w*)")
 _PRIV_DATA_RE = re.compile(r"^(DATA|DATAB|DATAV)\(([A-Za-z_]\w*),\s*([^)]+)\)")
 
 
@@ -244,7 +246,7 @@ def parse_private_refs(priv_path: str) -> tuple:
     """
     解析 wrappedlibc_private.h。
     返回 (func_refs, data_refs)：
-      func_refs: {sym: 来源宏};  GOM/GOWM/DATAM 的 my_ 符号不返回。
+      func_refs: {sym: 来源宏};  包含 my32_ 前缀符号（STATICBUILD 需要声明）。
       data_refs: {sym: (size, 来源宏)}
     """
     func_refs = {}
@@ -261,11 +263,20 @@ def parse_private_refs(priv_path: str) -> tuple:
                 sz = 256  # sizeof(...) 等非数字大小，默认 256
             data_refs[m.group(2)] = (sz, m.group(1))
             continue
+        # GOM/GOWM/DATAM: 收集原始名称和 my32_ 映射名称
+        m = _PRIV_GOM_RE.match(t)
+        if m:
+            n = m.group(2)
+            func_refs[n] = m.group(1)
+            func_refs["my32_" + n] = m.group(1)
+            continue
+        # GO2/GOW2: 收集原始名称和映射目标名称（含 my32_）
         m = _PRIV_MACRO2_RE.match(t)
         if m:
-            o = m.group(4)
-            if not o.startswith("my_") and not o.startswith("my32_"):
-                func_refs[o] = m.group(1)
+            n = m.group(2)  # 原始名称，如 "execl"
+            o = m.group(4)  # 映射目标，如 "my32_execv"
+            func_refs[n] = m.group(1)
+            func_refs[o] = m.group(1)
             continue
         m = _PRIV_MACRO_RE.match(t)
         if m:
@@ -544,12 +555,123 @@ typedef pid_t __pid_t;
 typedef void (*__sighandler_t)(int);
 #define __sigset_t sigset_t
 
-/* 补充头文件：wrapped*_private.h 引用的符号可能依赖这些头文件的声明 */
+/* 补充头文件：与 build-box64-musl.sh 中 all_musl_headers.c 对齐，
+ * 确保 decls（从 gcc -E 提取的 musl 头文件符号）对应的头文件实际被 include。
+ * 若此处缺失某个头文件，则 decls 中该头文件的符号会被跳过声明，
+ * 但 wrapped32 编译时找不到对应声明 → undeclared 错误。 */
+
+/* 标准 C 头文件 */
+#include <complex.h>
+#include <errno.h>
+#include <fenv.h>
+#include <math.h>
+#include <setjmp.h>
+#include <signal.h>
+#include <time.h>
+#include <uchar.h>
+#include <wchar.h>
+#include <wctype.h>
+
+/* POSIX 头文件 */
+#include <aio.h>
+#include <cpio.h>
+#include <ctype.h>
+#include <dirent.h>
+#include <dlfcn.h>
+#include <fcntl.h>
+#include <fmtmsg.h>
+#include <fnmatch.h>
+#include <ftw.h>
+#include <glob.h>
+#include <grp.h>
+#include <iconv.h>
+#include <ifaddrs.h>
+#include <langinfo.h>
+#include <libgen.h>
+#include <libintl.h>
+#include <limits.h>
+#include <locale.h>
+/* <malloc.h> 不在此处 include：patch-musl-isnanf.py 注入了自定义 struct mallinfo，
+ * 与 musl <malloc.h> 中的定义冲突。malloc 相关函数由 <stdlib.h> 覆盖。 */
+#include <mqueue.h>
+#include <nl_types.h>
+#include <poll.h>
+#include <pthread.h>
+#include <pty.h>
+#include <pwd.h>
+#include <regex.h>
+#include <sched.h>
+#include <search.h>
+#include <semaphore.h>
+#include <spawn.h>
+#include <stdalign.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <strings.h>
+#include <tar.h>
+#include <termios.h>
+#include <unistd.h>
+#include <utime.h>
 #include <utmp.h>
 #include <utmpx.h>
-#include <pthread.h>
-#include <semaphore.h>
-#include <dlfcn.h>
+#include <wordexp.h>
+
+/* sys/* 头文件 */
+#include <syslog.h>
+#include <sys/epoll.h>
+#include <sys/eventfd.h>
+#include <sys/fanotify.h>
+#include <sys/fsuid.h>
+#include <sys/inotify.h>
+#include <sys/ioctl.h>
+#include <sys/ipc.h>
+#include <sys/klog.h>
+#include <sys/mman.h>
+#include <sys/mount.h>
+#include <sys/msg.h>
+#include <sys/personality.h>
+#include <sys/prctl.h>
+#include <sys/ptrace.h>
+#include <sys/quota.h>
+#include <sys/random.h>
+#include <sys/reboot.h>
+#include <sys/resource.h>
+#include <sys/sendfile.h>
+#include <sys/sem.h>
+#include <sys/shm.h>
+#include <sys/signalfd.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/statfs.h>
+#include <sys/statvfs.h>
+#include <sys/syscall.h>
+#include <sys/sysinfo.h>
+#include <sys/timeb.h>
+#include <sys/timerfd.h>
+#include <sys/times.h>
+#include <sys/timex.h>
+#include <sys/types.h>
+#include <sys/uio.h>
+#include <sys/un.h>
+#include <sys/utsname.h>
+#include <sys/wait.h>
+#include <sys/xattr.h>
+
+/* 网络头文件 */
+#include <arpa/inet.h>
+#include <netdb.h>
+#include <net/ethernet.h>
+#include <net/if.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+
+/* 其他系统头文件 */
+#include <mntent.h>
+#include <shadow.h>
 
 """
 

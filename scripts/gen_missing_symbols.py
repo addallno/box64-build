@@ -10,6 +10,7 @@ DATA_MACROS = {"DATA", "DATAV", "DATAB", "DATAM"}
 
 func_symbols = set()   # 需 & 地址的函数符号（N 或 O）
 my_func_symbols = set()  # GOM/GOWM 的 my_ 前缀（box64 自备，仅记录不 stub）
+my32_func_symbols = set()  # GOM/GOWM 的 my32_ 前缀（STATICBUILD 需 weak stub）
 data_symbols = {}      # 需 & 地址的数据符号 -> 大小 S
 my_data_symbols = set()
 
@@ -29,10 +30,15 @@ def parse(path):
             n = args[0]
             if macro in ("GOM", "GOWM"):
                 my_func_symbols.add("my_" + n)
+                # STATICBUILD 下 GOM 展开为 &my32_##N，需要 weak stub
+                my32_func_symbols.add("my32_" + n)
+                func_symbols.add("my32_" + n)
             elif macro in ("GO2", "GOW2", "GOD", "GOWD"):
                 # 第三个参数是映射目标 O；若只有 2 参（GOD 在无 LD80 时变 GO）取 N
                 o = args[2] if len(args) >= 3 else n
                 func_symbols.add(o)
+                if o.startswith("my32_"):
+                    my32_func_symbols.add(o)
             else:
                 func_symbols.add(n)
         elif macro in DATA_MACROS:
@@ -62,5 +68,6 @@ if __name__ == "__main__":
         sys.exit(1)
     parse(sys.argv[1])
     gen(sys.argv[2])
-    print("函数符号 %d 个, my_函数 %d 个, 数据符号 %d 个, my_数据 %d 个" %
-          (len(func_symbols), len(my_func_symbols), len(data_symbols), len(my_data_symbols)))
+    print("函数符号 %d 个, my_函数 %d 个, my32_函数 %d 个, 数据符号 %d 个, my_数据 %d 个" %
+          (len(func_symbols), len(my_func_symbols), len(my32_func_symbols),
+           len(data_symbols), len(my_data_symbols)))

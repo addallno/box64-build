@@ -269,8 +269,25 @@ echo "==> 打 musl 补丁（isnanf -> isnan / fts 注入 / stub 头）"
 mkdir -p $WORK/include
 python3 $GITHUB_WORKSPACE/scripts/patch-musl-isnanf.py $WORK/box64 $WORK/include
 
-echo "==> 复制缺失符号声明头到 include 目录"
-cp $WORK/box64/src/libtools/glibc_missing_symbols.h $WORK/include/ || true
+echo "==> 生成 musl 缺失符号 stub（gen-libc-stubs.py）"
+MUSL_SYMS_OPT=""
+if [ -s "$MUSL_SYMS" ]; then
+  MUSL_SYMS_OPT="--musl-syms $MUSL_SYMS"
+fi
+python3 $GITHUB_WORKSPACE/scripts/gen-libc-stubs.py \
+  --box64-src $WORK/box64 \
+  --output /tmp/glibc_missing_symbols.c \
+  --output-h /tmp/glibc_missing_symbols.h \
+  $MUSL_SYMS_OPT \
+  --musl-header-syms $MUSL_HEADER_SYMS \
+  --musl-header-decls $MUSL_HEADER_DECLS \
+  --musl-macros $MUSL_HEADER_MACROS \
+  -v
+
+echo "==> 复制缺失符号文件到构建目录"
+mkdir -p $WORK/include
+cp /tmp/glibc_missing_symbols.h $WORK/include/glibc_missing_symbols.h
+cp /tmp/glibc_missing_symbols.c $WORK/box64/src/libtools/glibc_missing_symbols.c
 
 echo "==> 提供 execinfo.h stub（musl 无此头，但 libc 含 backtrace 实现）"
 mkdir -p $WORK/include
