@@ -86,6 +86,9 @@ cat > /tmp/all_musl_headers.c << 'CEOF'
 #include <time.h>
 #include <locale.h>
 #include <regex.h>
+#include <assert.h>
+#include <resolv.h>
+#include <sys/file.h>
 #include <poll.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -325,7 +328,7 @@ MUTEX_MACROS='-DPTHREAD_ERRORCHECK_MUTEX_INITIALIZER={{{2}}} -DPTHREAD_RECURSIVE
 cmake .. \
   -DCI=1 \
   -DCMAKE_C_COMPILER=$CROSS_CC \
-  -DCMAKE_C_FLAGS="-D_GNU_SOURCE -D_DEFAULT_SOURCE -I$WORK/include -include $WORK/include/mmap64.h -Wno-implicit-function-declaration $MUTEX_MACROS" \
+  -DCMAKE_C_FLAGS="-D_GNU_SOURCE -D_DEFAULT_SOURCE -I$WORK/include -include $WORK/include/mmap64.h -Wno-implicit-function-declaration -fno-builtin $MUTEX_MACROS" \
   -DARM_DYNAREC=ON \
   -DBOX32=ON \
   -DSTATICBUILD=ON \

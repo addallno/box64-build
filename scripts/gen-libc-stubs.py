@@ -590,6 +590,7 @@ typedef void (*__sighandler_t)(int);
 
 /* POSIX 头文件 */
 #include <aio.h>
+#include <assert.h>
 #include <cpio.h>
 #include <ctype.h>
 #include <dirent.h>
@@ -616,6 +617,7 @@ typedef void (*__sighandler_t)(int);
 #include <pty.h>
 #include <pwd.h>
 #include <regex.h>
+#include <resolv.h>
 #include <sched.h>
 #include <search.h>
 #include <semaphore.h>
@@ -639,6 +641,7 @@ typedef void (*__sighandler_t)(int);
 /* sys/* 头文件 */
 #include <syslog.h>
 #include <sys/epoll.h>
+#include <sys/file.h>
 #include <sys/eventfd.h>
 #include <sys/fanotify.h>
 #include <sys/fsuid.h>
@@ -679,6 +682,7 @@ typedef void (*__sighandler_t)(int);
 
 /* 网络头文件 */
 #include <arpa/inet.h>
+#include <arpa/nameser.h>
 #include <netdb.h>
 #include <net/ethernet.h>
 #include <net/if.h>
@@ -695,7 +699,8 @@ typedef void (*__sighandler_t)(int);
 def generate_header(func_refs, data_refs, sigs, smart, out_path,
                     musl_header_decls=None,
                     musl_macros=None,
-                    static_libc_syms=None):
+                    static_libc_syms=None,
+                    musl_syms=None):
     """生成 extern 声明头文件。
 
     五路过滤策略（最小化与 musl/box64 头文件的类型冲突）:
@@ -718,10 +723,11 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
     decls = musl_header_decls or set()
     macros = musl_macros or set()
     slc_syms = static_libc_syms or set()
+    musl_all = set(musl_syms) if musl_syms else set()
 
     # 过滤 dummy_* 假符号（wrappedlibc_private.h 中的特殊条目，非真实 C 函数）
-    # 过滤 my_* 符号（box64 wrapper 函数，定义在各自 .c 文件中，不应出现在 header 中）
-    func_refs = {n for n in func_refs if not n.startswith("dummy_") and not n.startswith("my_")}
+    # 过滤 my_* 和 my32_* 符号（box64 wrapper 函数，定义在各自 .c 文件中，不应出现在 header 中）
+    func_refs = {n for n in func_refs if not n.startswith("dummy_") and not n.startswith("my_") and not n.startswith("my32_")}
 
     print(f"[header] 输入: func_refs={len(func_refs)}, decls={len(decls)}, "
           f"macros={len(macros)}, static_libc={len(slc_syms)}")
@@ -748,7 +754,11 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
         "eventfd", "eventfd_read", "eventfd_write",
         "fanotify_init", "fanotify_mark",
         "klogctl", "quotactl", "reboot",
-        "malloc_usable_size",
+        "malloc_usable_size", "flock", "_flushlbf",
+        "__res_close", "__res_iclose", "__res_ninit", "__res_nclose",
+        "__assert_fail", "__bzero",
+        "capget", "capset", "gnu_dev_major", "gnu_dev_makedev", "gnu_dev_minor",
+        "_IO_getc", "_IO_putc",
         "fmtmsg", "ftime",
         "__progname", "__progname_full",
         "openpty",
@@ -811,6 +821,8 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
         "getopt_long", "getopt_long_only",
         # musl 内部实现 / __ 前缀变体
         "__strtold_internal",
+        # musl <syslog.h> 已声明
+        "vsyslog",
         # GCC 内建函数 / musl _l 后缀宏：extern void 声明会冲突
         "strfmon", "strfmon_l",
         # roundeven/roundevenf: smart 路径提供 stub 签名
@@ -850,6 +862,9 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
             continue
         # 第二路：musl 头文件已有函数/类型声明 → 跳过
         if name in decls:
+            continue
+        # 第二路扩展：musl libc.a 符号（nm 提取）→ 跳过
+        if name in musl_all:
             continue
         # 第三路：musl 以宏形式提供 → #undef 后 fallthrough 到声明
         if name in macros:
@@ -1037,7 +1052,8 @@ def main():
     h_lines = generate_header(func_refs, data_refs, sigs, smart, h_path,
                               musl_header_decls=musl_header_decls,
                               musl_macros=musl_macros,
-                              static_libc_syms=static_libc_syms)
+                              static_libc_syms=static_libc_syms,
+                              musl_syms=musl_syms)
 
     print(f"[生成] 输出 {args.output}（{nlines} 行）")
     print(f"[生成] 输出 {h_path}（{h_lines} 行）")
