@@ -75,6 +75,30 @@ def patch_text(s: str):
     return pattern.sub(lambda m: all_repl[m.group(1)], s)
 
 
+# ---- static_libc.h 专项：修正与 musl 头冲突的错误签名 ----
+# wrappedlibc.c 先 include libtools/static_libc.h，再经 wrappedlib_init.h
+# → glibc_missing_symbols.h include <assert.h>/<resolv.h>。
+# static_libc.h 的旧签名与 musl 不兼容 → conflicting types。
+STATIC_LIBC_FIXES = {
+    # musl assert.h: _Noreturn void __assert_fail(const char*, const char*, int, const char*);
+    "extern void __assert_fail(void*, void*, uint32_t, void*);":
+        "extern void __assert_fail(const char *, const char *, int, const char *);",
+    # musl resolv.h: struct __res_state *__res_state(void); 由 <resolv.h> 提供
+    "extern void* __res_state();":
+        "/* struct __res_state *__res_state(void) 由 <resolv.h> 提供 */",
+}
+
+
+def patch_static_libc_h(s: str):
+    """static_libc.h：修正 __assert_fail/__res_state 错误签名，消除与 musl 头冲突。"""
+    count = 0
+    for old, new in STATIC_LIBC_FIXES.items():
+        if old in s:
+            s = s.replace(old, new, 1)
+            count += 1
+    return s, count
+
+
 def patch_mysignal_h(s: str):
     """mysignal.h：非 Windows 分支补 __sigset_t typedef（musl 中它只是结构体标签）。"""
     if SIGSET_TYPEDEF_PATCH in s:
@@ -902,6 +926,9 @@ for dirpath, _dirs, files in os.walk(os.path.join(root, "src")):
                 new, m = patch_wrapped32_libc_c(new)
             else:
                 new, m = patch_wrappedlibc_c(new)
+            n += m
+        if fn == "static_libc.h":
+            new, m = patch_static_libc_h(new)
             n += m
         if fn == "wrappedldlinux.c":
             if "wrapped32" in path:

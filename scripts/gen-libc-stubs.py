@@ -747,7 +747,8 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
         "_rtld_global",          # wrapped32/wrappedldlinux.c 由 patch 注入 extern int 声明
         "_rtld_global_ro",       # wrapped32/wrappedldlinux.c 由 patch 注入 extern int 声明
         "__ctype_b",             # musl <ctype.h> 宏 → (*__ctype_b_loc())
-        "__timezone",            # musl <time.h> extern long timezone
+        # __timezone 不进 _MUSL_KNOWN_DATA：musl 只有 timezone，无 __timezone；
+        # private.h 的 DATAB/DATAM(__timezone) 需 data 段声明
         "_r_debug",              # musl 内部，某些头文件可能声明
     }
 
@@ -890,10 +891,9 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
             skipped_slc += 1
             continue
         # 第二路：musl 头文件已有函数/类型声明 → 跳过
+        # 注意：不因 musl_all（nm 符号）跳过——内部符号可能在 libc.a 中有
+        # 但公共头未声明，private.h 取地址时需本头提供 extern 声明。
         if name in decls:
-            continue
-        # 第二路扩展：musl libc.a 符号（nm 提取）→ 跳过
-        if name in musl_all:
             continue
         # 第三路：musl 以宏形式提供 → #undef 后 fallthrough 到声明
         if name in macros:
