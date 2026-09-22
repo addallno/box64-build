@@ -256,7 +256,7 @@ N_DCL=$(wc -l < $MUSL_HEADER_DECLS 2>/dev/null || echo 0)
 echo "musl 头文件: 声明 $N_DCL + 宏 $N_MAC = 总 $N_HDR"
 
 # 补充 mmap64.h（我们的注入头）声明的符号，避免 header 重复声明冲突
-for sym in __ctype_b_loc __ctype_tolower_loc __ctype_toupper_loc __compar_d_fn_t mmap64; do
+for sym in __ctype_b_loc __ctype_tolower_loc __ctype_toupper_loc __compar_d_fn_t mmap64 scandirat; do
   grep -qxF "$sym" $MUSL_HEADER_SYMS || echo "$sym" >> $MUSL_HEADER_SYMS
   grep -qxF "$sym" $MUSL_HEADER_DECLS || echo "$sym" >> $MUSL_HEADER_DECLS
 done
