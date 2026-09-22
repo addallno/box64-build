@@ -506,20 +506,33 @@ def _render_data_stub(name: str, size: int):
             f" __attribute__((aligned(16)));")
 
 
-def generate_stubs(missing_funcs, missing_datas, sigs, smart, out_path):
+def generate_stubs(missing_funcs, missing_datas, sigs, smart, out_path,
+                   musl_header_decls=None):
+    decls = musl_header_decls or set()
+    data_syms = set(missing_datas.keys())
     lines = [_HEADER]
     undefs = _render_undefs(smart)
     if undefs:
         lines.append("/* 屏蔽 musl <math.h> 等头文件中的宏定义，避免与 stub 定义冲突 */")
         lines.append(undefs)
     lines.append("/* ================= 函数 stub ================= */")
+    skipped_decl = 0
+    skipped_data = 0
     for name in sorted(missing_funcs):
         if name in smart:
             lines.append(smart[name])
+        elif name in decls:
+            skipped_decl += 1
+            continue
+        elif name in data_syms:
+            skipped_data += 1
+            continue
         elif name in sigs:
             lines.append(_render_func_stub(name, sigs[name]))
         else:
             lines.append(_render_func_stub(name))
+    if skipped_decl or skipped_data:
+        print(f"[stubs] 跳过函数 stub: decls={skipped_decl}, data冲突={skipped_data}")
     lines.append("")
     lines.append("/* ================= 数据 stub ================= */")
     for name in sorted(missing_datas):
@@ -965,14 +978,7 @@ def main():
 
     smart = build_smart_map(missing_funcs)
 
-    # 4. 生成
-    os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)
-    nlines = generate_stubs(missing_funcs, missing_datas, sigs, smart, args.output)
-
-    h_path = args.output_h or os.path.join(
-        os.path.dirname(args.output), "glibc_missing_symbols.h")
-
-    # 加载 musl 头文件可见符号集
+    # 3.5 加载 musl 头文件声明集（供 generate_stubs 和 generate_header 使用）
     musl_header_syms = set()
     if args.musl_header_syms and os.path.isfile(args.musl_header_syms):
         with open(args.musl_header_syms, encoding="utf-8") as f:
@@ -990,6 +996,14 @@ def main():
         with open(args.musl_macros, encoding="utf-8") as f:
             musl_macros = {line.strip() for line in f if line.strip()}
         print(f"[musl] 头文件宏: {len(musl_macros)}")
+
+    # 4. 生成
+    os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)
+    nlines = generate_stubs(missing_funcs, missing_datas, sigs, smart, args.output,
+                            musl_header_decls=musl_header_decls)
+
+    h_path = args.output_h or os.path.join(
+        os.path.dirname(args.output), "glibc_missing_symbols.h")
 
     h_lines = generate_header(func_refs, data_refs, sigs, smart, h_path,
                               musl_header_decls=musl_header_decls,
