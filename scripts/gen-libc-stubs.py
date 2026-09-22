@@ -720,7 +720,8 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
     slc_syms = static_libc_syms or set()
 
     # 过滤 dummy_* 假符号（wrappedlibc_private.h 中的特殊条目，非真实 C 函数）
-    func_refs = {n for n in func_refs if not n.startswith("dummy_")}
+    # 过滤 my_* 符号（box64 wrapper 函数，定义在各自 .c 文件中，不应出现在 header 中）
+    func_refs = {n for n in func_refs if not n.startswith("dummy_") and not n.startswith("my_")}
 
     print(f"[header] 输入: func_refs={len(func_refs)}, decls={len(decls)}, "
           f"macros={len(macros)}, static_libc={len(slc_syms)}")
