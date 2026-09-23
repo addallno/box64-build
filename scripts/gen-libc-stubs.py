@@ -1204,13 +1204,13 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
         "setlogmask": "int setlogmask(int maskpri)",
         "syslog": "void syslog(int priority, const char* format, ...)",
         # vsyslog 不进 FORCE：wrappedlibc.c 自带 extern int
-        # 5 个 __pthread_*：musl 头未声明；签名须与 generate_stubs 的
-        # weak stub（无原型 → intptr_t(void)）一致，否则 conflicting types
-        "__pthread_getspecific": "intptr_t __pthread_getspecific(void)",
-        "__pthread_setspecific": "intptr_t __pthread_setspecific(void)",
-        "__pthread_rwlock_rdlock": "intptr_t __pthread_rwlock_rdlock(void)",
-        "__pthread_rwlock_unlock": "intptr_t __pthread_rwlock_unlock(void)",
-        "__pthread_rwlock_wrlock": "intptr_t __pthread_rwlock_wrlock(void)",
+        # 5 个 __pthread_*：musl 头未声明；签名须与 src/wrapped/wrappedlibpthread.c
+        # L69-78 本地 extern 完全一致，否则 conflicting types
+        "__pthread_getspecific": "void* __pthread_getspecific(size_t)",
+        "__pthread_setspecific": "int __pthread_setspecific(size_t, void*)",
+        "__pthread_rwlock_rdlock": "int __pthread_rwlock_rdlock(void*)",
+        "__pthread_rwlock_unlock": "int __pthread_rwlock_unlock(void*)",
+        "__pthread_rwlock_wrlock": "int __pthread_rwlock_wrlock(void*)",
     }
     for name in sorted(func_refs):
         # 数据符号 / 已知 DATA 符号不在函数段声明（避免 redeclared as different kind）
