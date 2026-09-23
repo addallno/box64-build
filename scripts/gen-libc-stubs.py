@@ -859,9 +859,24 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
         "__wcstoul_l", "__wcstoull_l", "__wcstod_l", "__wcstof_l",
         "__wcstold_l",
     }
+    # 强制声明：decls 是 gcc -E 全文标识符（含字符串/未用宏展开残留），非真实声明；
+    # musl 公共头未声明、static_libc.h 也无 → private.h GO() 取地址必须由本头提供 extern。
+    _FORCE_DECLARE = {
+        "__res_close", "__res_iclose", "__res_ninit", "__res_nclose",
+    }
     for name in sorted(func_refs):
         # 数据符号 / 已知 DATA 符号不在函数段声明（避免 redeclared as different kind）
         if name in data_refs or name in _MUSL_KNOWN_DATA:
+            continue
+        # 强制声明优先于 decls/static_libc 跳过（在 _KNOWN 之后、smart 之前）
+        if name in _FORCE_DECLARE:
+            if name in macros:
+                lines.append(f"#ifdef {name}")
+                lines.append(f"#undef {name}")
+                lines.append("#endif")
+                undefed += 1
+            lines.append(f"extern void {name}(void);")
+            declared += 1
             continue
         # 前置跳过：musl 已知声明/内联/宏（优先级最高，避免与 smart 路径冲突）
         if name in _KNOWN_MUSL_DECLS:
