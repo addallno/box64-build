@@ -1246,7 +1246,9 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
                     declared += 1
                 else:
                     # 不安全签名：无参声明（仅取地址合法，C 允许）
-                    lines.append(f"extern {ret} {name}();")
+                    # 返回类型也不安全（如 XID/X11）时降级 unsigned long（机器字宽）
+                    safe_ret = ret if _is_safe_shared_sig(ret, "") else "unsigned long"
+                    lines.append(f"extern {safe_ret} {name}();")
                     declared += 1
             elif name.startswith("my32_") and name not in box32_sigs:
                 # 无本地定义的 my32_*（如 GOWS→my32_imaxdiv）：
