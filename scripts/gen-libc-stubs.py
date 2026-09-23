@@ -411,6 +411,23 @@ def parse_box32_sigs(*scan_dirs) -> dict:
                         cur[0], cur[1], cur[2] = ret, params, is_def
                     elif is_def == cur[2] and len(params) > len(cur[1]):
                         cur[0], cur[1] = ret, params
+            # 展开本文件 FINITE 系列宏（F1F/F1D/F2F/F2D）：
+            # EXPORT R my32___##N##_finite P 因含 ## 被 head_re 跳过，
+            # 若不补录签名，path4 会生成 extern void(name)(void) 与真实定义冲突
+            _FINITE_MACROS = {
+                "F1F": ("float", "(float a)"),
+                "F1D": ("double", "(double a)"),
+                "F2F": ("float", "(float a, float b)"),
+                "F2D": ("double", "(double a, double b)"),
+            }
+            finite_call_re = re.compile(
+                r"^(F1F|F1D|F2F|F2D)\(([A-Za-z0-9_]+)\)\s*$", re.M)
+            for m in finite_call_re.finditer(text):
+                kind, base = m.group(1), m.group(2)
+                name = f"my32___{base}_finite"
+                if name not in sigs:
+                    ret, params = _FINITE_MACROS[kind]
+                    sigs[name] = [ret, params, True, False]
     # 规范为 {name: (ret, params, conflict)} 三元组
     return {n: (v[0], v[1], v[3]) for n, v in sigs.items()}
 
