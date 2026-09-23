@@ -290,6 +290,12 @@ python3 $GITHUB_WORKSPACE/scripts/gen-libc-stubs.py \
   --musl-header-syms $MUSL_HEADER_SYMS \
   --musl-header-decls $MUSL_HEADER_DECLS \
   --musl-macros $MUSL_HEADER_MACROS \
+  --force-stub res_dnok --force-stub res_hnok --force-stub res_mailok --force-stub res_ownok \
+  --force-stub __chk_fail \
+  --force-stub pthread_mutexattr_getprioceiling --force-stub pthread_mutexattr_setprioceiling \
+  --force-stub WrapXImage --force-stub UnwrapXImage \
+  --force-stub malloc_trim \
+  --force-stub-data __sys_siglist=1024 --force-stub-data my32_xinput_opcode=4 \
   -v
 
 echo "==> 复制缺失符号文件到构建目录"

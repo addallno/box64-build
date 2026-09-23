@@ -745,8 +745,9 @@ def _render_data_stub(name: str, size: int):
 
 
 def generate_stubs(missing_funcs, missing_datas, sigs, smart, out_path,
-                   musl_header_decls=None):
+                   musl_header_decls=None, force_names=None):
     decls = musl_header_decls or set()
+    forced = force_names or set()
     data_syms = set(missing_datas.keys())
     lines = [_HEADER]
     undefs = _render_undefs(smart)
@@ -759,7 +760,7 @@ def generate_stubs(missing_funcs, missing_datas, sigs, smart, out_path,
     for name in sorted(missing_funcs):
         if name in smart:
             lines.append(smart[name])
-        elif name in decls:
+        elif name in decls and name not in forced:
             skipped_decl += 1
             continue
         elif name in data_syms:
@@ -1363,6 +1364,8 @@ def main():
                     help="musl tarball 缓存目录（默认 <box64-src 同级目录>/.cache）")
     ap.add_argument("--force-stub", action="append", default=[],
                     help="强制对某符号生成 stub（即使符号集认为 musl 存在）")
+    ap.add_argument("--force-stub-data", action="append", default=[],
+                    help="强制为某数据符号生成 stub，格式 NAME=SIZE（即使不在缺失列表）")
     ap.add_argument("--no-stub", action="append", default=[],
                     help="强制跳过某符号（即使缺失）")
     ap.add_argument("--musl-header-syms", default=None,
@@ -1445,6 +1448,9 @@ def main():
         missing_datas.pop(s, None)
     for s in args.force_stub:
         missing_funcs.add(s)
+    for item in args.force_stub_data:
+        nm, _, sz = item.partition("=")
+        missing_datas[nm.strip()] = int(sz) if sz.strip() else 64
 
     smart = build_smart_map(missing_funcs)
 
@@ -1470,7 +1476,8 @@ def main():
     # 4. 生成
     os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)
     nlines = generate_stubs(missing_funcs, missing_datas, sigs, smart, args.output,
-                            musl_header_decls=musl_header_decls)
+                            musl_header_decls=musl_header_decls,
+                            force_names=set(args.force_stub))
 
     h_path = args.output_h or os.path.join(
         os.path.dirname(args.output), "glibc_missing_symbols.h")

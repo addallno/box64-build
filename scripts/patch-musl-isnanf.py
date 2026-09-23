@@ -769,6 +769,81 @@ def inject_scandirat(root: str):
         print("CMakeLists.txt: 已把 scandirat_glibc.c 加入无条件 ELFLOADER_SRC")
 
 
+def patch_mallochook_c(s: str):
+    """mallochook.c：STATICBUILD 下的裁剪。
+    1. 移除 box_strdup/box_realpath 函数定义（static 下 debug.h 将二者定义为
+       strdup/realpath 宏，函数定义会与 musl 产生重复符号）。
+    2. 移除 EXPORT malloc 起的 interpose 区、checkHookedSymbols、init_malloc_hook
+       （static 下与 musl 重复符号，且调用处已被 #ifndef STATICBUILD 排除）。
+    3. 为 box32_* 内的 malloc_trim 调用注入本地声明（musl 无此函数）。
+    保留 L140 box_malloc_usable_size 指针与 box32_* 六函数（box32_* 即本次
+    需要 mallochook.c 进入 static 编译的原因）。
+    """
+    if "box64-build: static" in s:
+        return s, 0
+    n = 0
+    # 块A：box_strdup / box_realpath 函数定义
+    open_a = "char* box_strdup(const char* s) {"
+    close_a = "}\n\nstatic size_t pot(size_t l) {"
+    assert open_a in s, "mallochook.c 找不到 box_strdup 锚点"
+    assert close_a in s, "mallochook.c 找不到 box_realpath 结束锚点"
+    s = s.replace(open_a,
+                  "#ifndef STATICBUILD\n"
+                  "// box64-build: static 下 box_strdup/box_realpath 为宏，此处定义须裁掉\n"
+                  + open_a, 1)
+    s = s.replace(close_a,
+                  "}\n#endif // box64-build\n\nstatic size_t pot(size_t l) {", 1)
+    n += 1
+    # malloc_trim 本地声明（box32_* 内调用，musl 头不声明）
+    decl_anchor = "#ifdef BOX32\nint isCustomAddr(void* p);"
+    if decl_anchor in s:
+        s = s.replace(decl_anchor,
+                      "#ifdef BOX32\n"
+                      "int isCustomAddr(void* p);\n"
+                      "int malloc_trim(size_t); /* box64-build: musl 无，weak stub 提供 */",
+                      1)
+        n += 1
+    # 块B：EXPORT interpose 区 → init_malloc_hook
+    open_b = "// redefining all libc memory allocation routines"
+    close_b = "#undef SUPER\n#else//ANDROID"
+    assert open_b in s, "mallochook.c 找不到 interpose 锚点"
+    assert close_b in s, "mallochook.c 找不到 #undef SUPER 锚点"
+    s = s.replace(open_b,
+                  "#ifndef STATICBUILD\n"
+                  "// box64-build: static 裁剪 interpose 区（与 musl 重复符号）\n"
+                  + open_b, 1)
+    s = s.replace(close_b,
+                  "#undef SUPER\n#endif // box64-build\n#else//ANDROID", 1)
+    n += 1
+    return s, n
+
+
+def _inject_mallochook_cmake(s: str):
+    """CMakeLists.txt：STATICBUILD AND BOX32 下追加 mallochook.c 编译源。
+    非 static 时上游 if(NOT STATICBUILD) 已包含 mallochook.c，此处条件不触发，
+    无重复。返回 (新文本, 修改次数)。"""
+    if "box64-build: static BOX32 mallochook" in s:
+        return s, 0
+    anchor = ('"${BOX64_ROOT}/src/librarian/globalsymbols.c"\n'
+              "        )\n"
+              "endif()\n"
+              "if(BOX32)")
+    assert anchor in s, "CMakeLists.txt 找不到 mallochook 注入锚点"
+    block = ('"${BOX64_ROOT}/src/librarian/globalsymbols.c"\n'
+             "        )\n"
+             "endif()\n"
+             "\n"
+             "# box64-build: static BOX32 mallochook — box32_* 内存钩子需编入\n"
+             "if(STATICBUILD AND BOX32)\n"
+             "    list(APPEND ELFLOADER_SRC\n"
+             '        "${BOX64_ROOT}/src/mallochook.c"\n'
+             "        )\n"
+             "endif()\n"
+             "if(BOX32)")
+    s = s.replace(anchor, block, 1)
+    return s, 1
+
+
 def inject_missing_symbols(root: str):
     """为 STATICBUILD 下 musl 缺失的 glibc 符号生成 weak stub。
     优先使用 gen-libc-stubs.py（新版，精确差集：读取 nm 符号文件或下载 musl 源码，
@@ -820,14 +895,21 @@ def inject_missing_symbols(root: str):
     cmake = os.path.join(root, "CMakeLists.txt")
     with open(cmake, "r", encoding="utf-8") as f:
         s = f.read()
+    changed = False
     src_entry = '"${BOX64_ROOT}/src/libtools/glibc_missing_symbols.c"'
     if src_entry not in s:
         anchor = '"${BOX64_ROOT}/src/libtools/scandirat_glibc.c"'
         assert anchor in s, f"CMakeLists.txt 找不到锚点 {anchor}"
         s = s.replace(anchor, anchor + "\n    " + src_entry, 1)
+        changed = True
+        print("CMakeLists.txt: 已把 glibc_missing_symbols.c 加入无条件 ELFLOADER_SRC")
+    s, m = _inject_mallochook_cmake(s)
+    if m:
+        changed = True
+        print("CMakeLists.txt: 已追加 STATICBUILD AND BOX32 下 mallochook.c 编译块")
+    if changed:
         with open(cmake, "w", encoding="utf-8") as f:
             f.write(s)
-        print("CMakeLists.txt: 已把 glibc_missing_symbols.c 加入无条件 ELFLOADER_SRC")
 
 
 def _inject_guard_in_file(path: str, guard: str) -> bool:
@@ -999,6 +1081,9 @@ for dirpath, _dirs, files in os.walk(os.path.join(root, "src")):
             if "wrapped32" in path:
                 new, m = patch_wrapped32_ldlinux_c(new)
                 n += m
+        if fn == "mallochook.c":
+            new, m = patch_mallochook_c(new)
+            n += m
         if n:
             with open(path, "w", encoding="utf-8") as f:
                 f.write(new)
