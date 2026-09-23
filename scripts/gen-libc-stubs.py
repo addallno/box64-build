@@ -1251,10 +1251,16 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
 
     lines.append("")
     lines.append("/* ================= 数据声明 ================= */")
-    # DATAM 的 my32_ 映射：libc_net32.c 以 struct in6_addr 定义，须匹配类型
+    # DATAM 的 my32_ 映射与 .c 本地定义类型须一致：
+    #   in6addr*: libc_net32.c 定义 struct in6_addr
+    #   ___libc_stack_end: wrapped32/wrappedldlinux.c 定义 ptr_t（BOX32 下 unsigned int）
+    #   __r_debug: wrapped32/wrappedldlinux.c 定义 void*[5]
+    # value = (类型, 可选数组维度)
     _EXPLICIT_DATA_C = {
-        "my32_in6addr_any": "struct in6_addr",
-        "my32_in6addr_loopback": "struct in6_addr",
+        "my32_in6addr_any": ("struct in6_addr", ""),
+        "my32_in6addr_loopback": ("struct in6_addr", ""),
+        "my32___libc_stack_end": ("unsigned int", ""),
+        "my32__r_debug": ("void*", "[5]"),
     }
     for name in sorted(data_refs):
         # musl 头文件已声明的数据 → 跳过
@@ -1264,7 +1270,8 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
         if name in _MUSL_KNOWN_DATA:
             continue
         if name in _EXPLICIT_DATA_C:
-            lines.append(f"extern {_EXPLICIT_DATA_C[name]} {name};")
+            typ, dims = _EXPLICIT_DATA_C[name]
+            lines.append(f"extern {typ} {name}{dims};")
         else:
             lines.append(f"extern unsigned char {name}[{data_refs[name][0]}];")
 
