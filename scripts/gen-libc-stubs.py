@@ -352,10 +352,10 @@ def parse_box32_sigs(*scan_dirs) -> dict:
     供 generate_header 为已有本地定义的 my32_ 生成兼容签名，避免 conflicting types。
     """
     sigs = {}
-    # 头部: [static|EXPORT] ret [EXPORT] my32_name (  —— ret 可含紧邻/分离的 *
+    # 头部: [static|EXPORT] ret [EXPORT] my32_name (  —— ret 多词(unsigned long等)+紧邻/分离 *
     head_re = re.compile(
         r"(?:^|\n)(?:static\s+|EXPORT\s+)*"
-        r"((?:const\s+)?[A-Za-z_][\w]*(?:\s*\*+)*)"
+        r"((?:const\s+)?(?:[A-Za-z_][\w]*\s+)*?[A-Za-z_][\w]*(?:\s*\*+)*)"
         r"\s*(?:EXPORT\s+)?"
         r"(my32_[A-Za-z0-9_]+)\s*\(")
     for wrapped32_dir in scan_dirs:
@@ -397,9 +397,17 @@ def parse_box32_sigs(*scan_dirs) -> dict:
                         continue
                 if ret in ("", "static") or "##" in name or "##" in params:
                     continue
-                if name not in sigs or len(params) > len(sigs[name][1]):
-                    sigs[name] = (ret, params)
-    return sigs
+                # 优先真实定义（{ 前无 ;）；否则首个匹配；勿盲目取更长 params
+                # （避免同名声明覆盖定义，如 makecontext void*→int32_t*）
+                is_def = "{" in after.split(";")[0]
+                if name not in sigs:
+                    sigs[name] = (ret, params, is_def)
+                elif is_def and not sigs[name][2]:
+                    sigs[name] = (ret, params, is_def)
+                elif is_def == sigs[name][2] and len(params) > len(sigs[name][1]):
+                    sigs[name] = (ret, params, is_def)
+    # 规范为 {name: (ret, params)} 二元组（丢弃 is_def 标记）
+    return {n: (v[0], v[1]) for n, v in sigs.items()}
 
 
 def scan_go2_my_targets(box64_src: str) -> set:
@@ -1236,10 +1244,13 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
                     else:
                         lines.append(f"extern {ret} {name}({params});")
                     declared += 1
-                # 不安全签名：跳过（不声明）
+                else:
+                    # 不安全签名：无参声明（仅取地址合法，C 允许）
+                    lines.append(f"extern {ret} {name}();")
+                    declared += 1
             elif name.startswith("my32_") and name not in box32_sigs:
                 # 无本地定义的 my32_*（如 GOWS→my32_imaxdiv）：
-                # path4 void + weak stub；unsafe 已在 box32_sigs 分支跳过
+                # path4 void + weak stub
                 lines.append(f"extern void {name}(void);")
                 declared += 1
             else:
@@ -1272,6 +1283,11 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
         if name in _EXPLICIT_DATA_C:
             typ, dims = _EXPLICIT_DATA_C[name]
             lines.append(f"extern {typ} {name}{dims};")
+        elif name.startswith("my32_"):
+            # my32_ 数据：定义在同 TU 早期（wrappedlibc.c L1909+），
+            # 声明 unsigned char[N] 会 conflicting → 一律跳过
+            # （跨 TU 的 in6addr/stack_end/r_debug 走 _EXPLICIT）
+            continue
         else:
             lines.append(f"extern unsigned char {name}[{data_refs[name][0]}];")
 

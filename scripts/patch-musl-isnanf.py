@@ -971,7 +971,7 @@ for dirpath, _dirs, files in os.walk(os.path.join(root, "src")):
             new, m = patch_static_libc_h(new)
             n += m
         if fn == "myalign.h":
-            # jmp_buf 与 wrapped32/wrappedlibc.c packed 版互斥：已定义则跳过
+            # patch_text 已跑：REPL 将 __sigset_t→sigset_t，old_jmp 须匹配转换后文本
             old_jmp = (
                 "typedef struct __jmp_buf_tag_s {\n"
                 "    jump_buff_x64_t __jmpbuf;\n"
@@ -982,7 +982,7 @@ for dirpath, _dirs, files in os.walk(os.path.join(root, "src")):
                 "      sigset64_t         __saved_mask64;\n"
                 "    };\n"
                 "    #else\n"
-                "    __sigset_t       __saved_mask;\n"
+                "    sigset_t       __saved_mask;\n"
                 "    #endif\n"
                 "} __jmp_buf_tag_t;"
             )
