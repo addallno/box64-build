@@ -602,6 +602,14 @@ def patch_wrapped32_libc_c(s: str):
         # --- posix_spawn: musl 的 posix_spawn_file_actions_t 无 __allocated/__used ---
         ("dst->__allocated = src->__allocated;\n", "/* musl posix_spawn_file_actions_t 无 __allocated，跳过 */\n"),
         ("dst->__used = src->__used;\n", "/* musl posix_spawn_file_actions_t 无 __used，跳过 */\n"),
+        # --- jmp_buf: 本地 packed 版本在 static_libc.h→myalign.h 普通版之前定义；
+        # define 守卫使 myalign.h 跳过重复 typedef（redefinition 冲突）---
+        ("typedef struct __attribute__((packed, aligned(4))) __jmp_buf_tag_s",
+         "#define BOX64_JMP_BUF_S_DEFINED\n"
+         "typedef struct __attribute__((packed, aligned(4))) __jmp_buf_tag_s"),
+        # --- vsyslog: 注释本地 extern int（musl syslog.h 声明 void；若 header
+        # 未 include syslog.h 则本地保留——二选一由 _HEADER_DECL 控制）---
+        # 不在此处改 vsyslog，改由 gen 从 _HEADER_DECL 去掉 syslog.h
     ]
     for old, new in pairs:
         if old in s:
@@ -959,6 +967,31 @@ for dirpath, _dirs, files in os.walk(os.path.join(root, "src")):
         if fn == "static_libc.h":
             new, m = patch_static_libc_h(new)
             n += m
+        if fn == "myalign.h":
+            # jmp_buf 与 wrapped32/wrappedlibc.c packed 版互斥：已定义则跳过
+            old_jmp = (
+                "typedef struct __jmp_buf_tag_s {\n"
+                "    jump_buff_x64_t __jmpbuf;\n"
+                "    int              __mask_was_saved;\n"
+                "    #ifdef ANDROID\n"
+                "    union {\n"
+                "      sigset_t         __saved_mask;\n"
+                "      sigset64_t         __saved_mask64;\n"
+                "    };\n"
+                "    #else\n"
+                "    __sigset_t       __saved_mask;\n"
+                "    #endif\n"
+                "} __jmp_buf_tag_t;"
+            )
+            new_jmp = (
+                "#ifndef BOX64_JMP_BUF_S_DEFINED\n"
+                "#define BOX64_JMP_BUF_S_DEFINED\n"
+                + old_jmp + "\n"
+                "#endif /* BOX64_JMP_BUF_S_DEFINED */"
+            )
+            if old_jmp in new and "BOX64_JMP_BUF_S_DEFINED" not in new:
+                new = new.replace(old_jmp, new_jmp, 1)
+                n += 1
         if fn == "wrappedldlinux.c":
             if "wrapped32" in path:
                 new, m = patch_wrapped32_ldlinux_c(new)

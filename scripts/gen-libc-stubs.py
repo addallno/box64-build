@@ -234,10 +234,11 @@ def download_musl(cache_dir: str, url: str = None) -> str:
 # ----------------------------------------------------------- box64 引用符号
 
 _PRIV_MACRO_RE = re.compile(
-    r"^(GOD|GOWD|GO|GOW)\(([A-Za-z_]\w*),")
+    r"^(GOD|GOWD|GO|GOW|GOS|GOWS)\(([A-Za-z_]\w*),")
 _PRIV_MACRO2_RE = re.compile(
     r"^(GO2|GOW2|GOD|GOWD)\(([A-Za-z_]\w*),([^,]+),\s*([A-Za-z_]\w*)\)")
 _PRIV_GOM_RE = re.compile(r"^(GOM|GOWM)\(([A-Za-z_]\w*)")
+_PRIV_GOS_RE = re.compile(r"^(GOS|GOWS)\(([A-Za-z_]\w*)")
 _PRIV_DATAM_RE = re.compile(r"^(DATAM)\(([A-Za-z_]\w*),\s*([^)]+)\)")
 _PRIV_DATA_RE = re.compile(r"^(DATA|DATAB|DATAV)\(([A-Za-z_]\w*),\s*([^)]+)\)")
 
@@ -255,7 +256,7 @@ def parse_private_refs(priv_path: str) -> tuple:
         t = line.strip()
         if not t or t.startswith("//"):
             continue
-        # DATA/DATAB/DATAV/DATAM: 数据符号（DATAM 含 my32 映射，但本体仍是数据）
+        # DATA/DATAB/DATAV/DATAM: 数据符号（DATAM 同时登记 my32_ 映射名）
         m = _PRIV_DATA_RE.match(t) or _PRIV_DATAM_RE.match(t)
         if m:
             try:
@@ -263,9 +264,18 @@ def parse_private_refs(priv_path: str) -> tuple:
             except ValueError:
                 sz = 256  # sizeof(...) 等非数字大小，默认 256
             data_refs[m.group(2)] = (sz, m.group(1))
+            if m.group(1) == "DATAM":
+                data_refs["my32_" + m.group(2)] = (sz, "DATAM")
             continue
         # GOM/GOWM: 函数符号，收集原始名称和 my32_ 映射名称
         m = _PRIV_GOM_RE.match(t)
+        if m:
+            n = m.group(2)
+            func_refs[n] = m.group(1)
+            func_refs["my32_" + n] = m.group(1)
+            continue
+        # GOS/GOWS: 结构返回，STATICBUILD → &my32_N（与 GOM 同样映射）
+        m = _PRIV_GOS_RE.match(t)
         if m:
             n = m.group(2)
             func_refs[n] = m.group(1)
@@ -335,43 +345,60 @@ def parse_static_libc_symbols(h_path: str) -> set:
     return syms
 
 
-def parse_box32_sigs(wrapped32_dir: str) -> dict:
-    """扫描 src/wrapped32/*.c 中 my32_* 函数定义，返回 {name: (ret, params)}。
+def parse_box32_sigs(*scan_dirs) -> dict:
+    """扫描目录列表 *.c 中 my32_* 函数定义，返回 {name: (ret, params)}。
 
+    支持多行签名与嵌套括号（如 int *(main)(int, char**, char**)）。
     供 generate_header 为已有本地定义的 my32_ 生成兼容签名，避免 conflicting types。
     """
     sigs = {}
-    if not os.path.isdir(wrapped32_dir):
-        return sigs
-    # 匹配: [EXPORT] ret name(params) {  或 EXPORT ret name(params) ...
-    pat = re.compile(
-        r"^(?:static\s+|EXPORT\s+)?"
-        r"((?:const\s+)?[A-Za-z_][\w\s\*]*?)\s+"
-        r"(my32_[A-Za-z0-9_]+)\s*\(([^)]*)\)")
-    for fn in sorted(os.listdir(wrapped32_dir)):
-        if not fn.endswith(".c"):
+    # 头部: [static|EXPORT] ret [EXPORT] my32_name (  —— ret 可含紧邻/分离的 *
+    head_re = re.compile(
+        r"(?:^|\n)(?:static\s+|EXPORT\s+)*"
+        r"((?:const\s+)?[A-Za-z_][\w]*(?:\s*\*+)*)"
+        r"\s*(?:EXPORT\s+)?"
+        r"(my32_[A-Za-z0-9_]+)\s*\(")
+    for wrapped32_dir in scan_dirs:
+        if not wrapped32_dir or not os.path.isdir(wrapped32_dir):
             continue
-        path = os.path.join(wrapped32_dir, fn)
-        try:
-            for line in open(path, encoding="utf-8", errors="replace"):
-                if line.startswith("#"):
-                    continue
-                m = pat.match(line.rstrip("\n"))
-                if not m:
-                    continue
-                # 只取定义行（含 {）或 EXPORT 声明
-                if "{" not in line and "EXPORT" not in line:
-                    continue
-                ret = m.group(1).replace("EXPORT", "").strip()
+        for fn in sorted(os.listdir(wrapped32_dir)):
+            if not fn.endswith(".c"):
+                continue
+            path = os.path.join(wrapped32_dir, fn)
+            try:
+                text = open(path, encoding="utf-8", errors="replace").read()
+            except OSError:
+                continue
+            for m in head_re.finditer(text):
+                ret = re.sub(r"\bEXPORT\b", "", m.group(1)).strip()
                 name = m.group(2)
-                params = re.sub(r"\bEXPORT\b", "", m.group(3)).strip()
+                # 从 ( 起平衡括号提取参数
+                i = m.end() - 1
+                depth = 0
+                j = i
+                while j < len(text):
+                    c = text[j]
+                    if c == "(":
+                        depth += 1
+                    elif c == ")":
+                        depth -= 1
+                        if depth == 0:
+                            break
+                    j += 1
+                if j >= len(text):
+                    continue
+                params = text[i + 1:j]
+                params = re.sub(r"\bEXPORT\b", "", params)
+                params = re.sub(r"\s+", " ", params).strip()
+                after = text[j + 1:j + 40]
+                # 只取定义（{）或 EXPORT 声明（; 或 __attribute__ 后接 {）
+                if "{" not in after.split(";")[0] and "EXPORT" not in m.group(0):
+                    if ";" not in after and "{" not in after:
+                        continue
                 if ret in ("", "static") or "##" in name or "##" in params:
                     continue
-                # 保留更长参数的签名（更完整）
                 if name not in sigs or len(params) > len(sigs[name][1]):
                     sigs[name] = (ret, params)
-        except OSError:
-            continue
     return sigs
 
 
@@ -457,13 +484,16 @@ def inject_my64_decls_into_init32(box64_src: str) -> int:
         print("[init32] 未找到 GO2 my_* 目标")
         return 0
     my64 = parse_my64_sigs(box64_src)
-    # static_*.h 已有真实签名的 my_*：跳过注入（void 会 conflicting types）
+    # static_*.h / signals.h 已有真实签名的 my_*：跳过注入（void 会 conflicting types）
     declared_elsewhere = set()
-    for hname in ("static_threads.h", "static_libc.h"):
-        hp = os.path.join(box64_src, "src", "libtools", hname)
-        if not os.path.isfile(hp):
+    for hpath in (
+        os.path.join(box64_src, "src", "libtools", "static_threads.h"),
+        os.path.join(box64_src, "src", "libtools", "static_libc.h"),
+        os.path.join(box64_src, "src", "include", "signals.h"),
+    ):
+        if not os.path.isfile(hpath):
             continue
-        for hline in open(hp, encoding="utf-8", errors="replace"):
+        for hline in open(hpath, encoding="utf-8", errors="replace"):
             hm = re.match(r"^\s*(?:extern\s+)?\S+\s+(my_\w+)\s*\(", hline)
             if hm:
                 declared_elsewhere.add(hm.group(1))
@@ -814,7 +844,7 @@ typedef void (*__sighandler_t)(int);
 #include <wordexp.h>
 
 /* sys/* 头文件 */
-#include <syslog.h>
+#include <sys/uio.h>
 #include <sys/epoll.h>
 #include <sys/file.h>
 #include <sys/eventfd.h>
@@ -1016,8 +1046,8 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
     skipped_slc = 0
     # musl 头文件已声明但 gcc -E 提取可能遗漏的函数（musl 内部实现/条件声明）
     _KNOWN_MUSL_DECLS = {
-        # arc4random/malloc_usable_size: stdlib.h/malloc.h 已声明（CI conflicting 确认）
-        "arc4random", "arc4random_buf", "malloc_usable_size",
+        # 注意: arc4random/arc4random_buf/malloc_usable_size 不在 _KNOWN——
+        # musl 若无声明（或 malloc.h 未 include）则由 path4/FORCE 提供
         # __pthread_mutexattr_*: static_libc.h → static_threads.h 已声明
         "__pthread_mutexattr_destroy", "__pthread_mutexattr_settype",
         # __pthread_getspecific/setspecific/rwlock_*: pthread.h/static_threads.h 已声明
@@ -1123,12 +1153,14 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
     # 已有正确签名（void(void*,int)/void(void*)/int(void*)），须走 slc_syms 跳过，不可强制。
     _FORCE_DECLARE = {
         "__res_close",
-        # 仅保留确认无前置声明的符号。
-        # arc4random/malloc_usable_size/__pthread_mutexattr_* 与
-        # __pthread_getspecific/setspecific/rwlock_* 已由
-        # stdlib.h/malloc.h/static_threads.h/pthread.h 在本头之前声明
-        # → 须走 _KNOWN 跳过，FORCE void(void) 会 conflicting types
-        # （CI 35825300955/35825886967 确认）。
+        # arc4random*: musl 可能不声明（需 _GNU_SOURCE 或无实现）→ 强制 extern void
+        # malloc_usable_size: musl malloc.h 有声明但本头故意不 include malloc.h
+        # （mallinfo 冲突）→ decls 含它会 path4 跳过导致 undeclared → FORCE
+        "arc4random", "arc4random_buf", "malloc_usable_size",
+        # syslog.h 已从 _HEADER_DECL 移除（与 wrappedlibc.c extern int vsyslog 冲突）；
+        # closelog/openlog/setlogmask/syslog 不再经 syslog.h 可见 → FORCE
+        # vsyslog 不进 FORCE：wrappedlibc.c 自带 extern int，FORCE void 会冲突
+        "closelog", "openlog", "setlogmask", "syslog",
         "res_nquery",
     }
     for name in sorted(func_refs):
@@ -1199,6 +1231,11 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
                         lines.append(f"extern {ret} {name}({params});")
                     declared += 1
                 # 不安全签名：跳过（不声明）
+            elif name.startswith("my32_") and name not in box32_sigs:
+                # 无本地定义的 my32_*（如 GOWS→my32_imaxdiv）：
+                # path4 void + weak stub；unsafe 已在 box32_sigs 分支跳过
+                lines.append(f"extern void {name}(void);")
+                declared += 1
             else:
                 lines.append(f"extern void {name}(void);")
                 declared += 1
@@ -1208,6 +1245,11 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
 
     lines.append("")
     lines.append("/* ================= 数据声明 ================= */")
+    # DATAM 的 my32_ 映射：libc_net32.c 以 struct in6_addr 定义，须匹配类型
+    _EXPLICIT_DATA_C = {
+        "my32_in6addr_any": "struct in6_addr",
+        "my32_in6addr_loopback": "struct in6_addr",
+    }
     for name in sorted(data_refs):
         # musl 头文件已声明的数据 → 跳过
         if name in decls or name in macros:
@@ -1215,7 +1257,10 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
         # 已知的 musl 声明数据符号 → 跳过
         if name in _MUSL_KNOWN_DATA:
             continue
-        lines.append(f"extern unsigned char {name}[{data_refs[name][0]}];")
+        if name in _EXPLICIT_DATA_C:
+            lines.append(f"extern {_EXPLICIT_DATA_C[name]} {name};")
+        else:
+            lines.append(f"extern unsigned char {name}[{data_refs[name][0]}];")
 
     lines.append("")
     lines.append("#endif /* _GLIBC_MISSING_SYMBOLS_H */")
@@ -1308,7 +1353,12 @@ def main():
     sigs = parse_static_libc_signatures(slh)
     static_libc_syms = parse_static_libc_symbols(slh)
     # my32_ 本地定义签名（header 声明须兼容，避免 conflicting types）
-    box32_sigs = parse_box32_sigs(wrapped32_dir) if os.path.isdir(wrapped32_dir) else {}
+    # 扫 wrapped32 + libtools（my32_imaxdiv/div 等可能在 libtools/*32*.c）
+    libtools_dir = os.path.join(args.box64_src, "src", "libtools")
+    box32_sigs = parse_box32_sigs(
+        wrapped32_dir if os.path.isdir(wrapped32_dir) else None,
+        libtools_dir if os.path.isdir(libtools_dir) else None,
+    )
     if args.verbose:
         print(f"[box64] 引用函数 {len(func_refs)}、数据 {len(data_refs)}、"
               f"static_libc.h 签名 {len(sigs)}、定义+声明 {len(static_libc_syms)}、"
