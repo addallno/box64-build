@@ -235,8 +235,10 @@ def download_musl(cache_dir: str, url: str = None) -> str:
 
 _PRIV_MACRO_RE = re.compile(
     r"^(GOD|GOWD|GO|GOW|GOS|GOWS)\(([A-Za-z_]\w*),")
+# 允许 name@VERSION（如 pthread_cond_broadcast@GLIBC_2.0）——版本后缀不是 C 标识符，
+# 注册前须 strip；目标 O（my32_*）才是需声明的符号。
 _PRIV_MACRO2_RE = re.compile(
-    r"^(GO2|GOW2|GOD|GOWD)\(([A-Za-z_]\w*),([^,]+),\s*([A-Za-z_]\w*)\)")
+    r"^(GO2|GOW2|GOD|GOWD)\(([A-Za-z_]\w*(?:@[A-Za-z0-9_.]+)?),([^,]+),\s*([A-Za-z_]\w*)\)")
 _PRIV_GOM_RE = re.compile(r"^(GOM|GOWM)\(([A-Za-z_]\w*)")
 _PRIV_GOS_RE = re.compile(r"^(GOS|GOWS)\(([A-Za-z_]\w*)")
 _PRIV_DATAM_RE = re.compile(r"^(DATAM)\(([A-Za-z_]\w*),\s*([^)]+)\)")
@@ -284,9 +286,13 @@ def parse_private_refs(priv_path: str) -> tuple:
         # GO2/GOW2: 收集原始名称和映射目标名称（含 my32_）
         m = _PRIV_MACRO2_RE.match(t)
         if m:
-            n = m.group(2)  # 原始名称，如 "execl"
+            n = m.group(2)  # 原始名称，如 "execl" 或 "pthread_kill@GLIBC_2.0"
             o = m.group(4)  # 映射目标，如 "my32_execv"
-            func_refs[n] = m.group(1)
+            # 版本后缀（@GLIBC_x.y）不是合法 C 标识符；strip 后再注册（常已被 GOM 收录）
+            if "@" in n:
+                n = n.split("@", 1)[0]
+            if n:
+                func_refs[n] = m.group(1)
             func_refs[o] = m.group(1)
             continue
         m = _PRIV_MACRO_RE.match(t)
@@ -962,7 +968,9 @@ def _is_safe_shared_sig(ret: str, params: str) -> bool:
         if re.search(r"_32(_t)?$", t) or t.endswith("_32_t"):
             return False
         if t in ("posix_spawn_file_actions_32_t", "fcvalue_32_t",
-                 "EventHandler", "CURLSHoption"):
+                 "EventHandler", "CURLSHoption",
+                 # threads32.c 局部 typedef，共享头不可见
+                 "pthread_cond_2_0_t"):
             return False
         return True
 
@@ -1080,11 +1088,9 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
         # musl 若无声明（或 malloc.h 未 include）则由 path4/FORCE 提供
         # __pthread_mutexattr_*: static_libc.h → static_threads.h 已声明
         "__pthread_mutexattr_destroy", "__pthread_mutexattr_settype",
-        # __pthread_getspecific/setspecific/rwlock_*: pthread.h/static_threads.h 已声明
-        # （CI 35825886967 FORCE void 确认 conflicting）
-        "__pthread_getspecific", "__pthread_setspecific",
-        "__pthread_rwlock_rdlock", "__pthread_rwlock_unlock",
-        "__pthread_rwlock_wrlock",
+        # __pthread_getspecific/setspecific/rwlock_* 不进 _KNOWN：
+        # musl pthread.h/static_threads.h 实际未声明这些 __ 符号（CI 98cf1c1 undeclared）；
+        # FORCE 须用与 weak stub 一致的 intptr_t(void)，void(void) 会 conflicting（35825886967）
         # 其余 C类历史条目：musl 头未对 wrapped32 可见声明，留在集合会导致 GO() 取地址 undeclared
         "__fdelt_chk", "__xpg_basename", "dn_skipname",
         "fts_close", "fts_open", "fts_set", "fts_children", "fts_read",
@@ -1198,6 +1204,13 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
         "setlogmask": "int setlogmask(int maskpri)",
         "syslog": "void syslog(int priority, const char* format, ...)",
         # vsyslog 不进 FORCE：wrappedlibc.c 自带 extern int
+        # 5 个 __pthread_*：musl 头未声明；签名须与 generate_stubs 的
+        # weak stub（无原型 → intptr_t(void)）一致，否则 conflicting types
+        "__pthread_getspecific": "intptr_t __pthread_getspecific(void)",
+        "__pthread_setspecific": "intptr_t __pthread_setspecific(void)",
+        "__pthread_rwlock_rdlock": "intptr_t __pthread_rwlock_rdlock(void)",
+        "__pthread_rwlock_unlock": "intptr_t __pthread_rwlock_unlock(void)",
+        "__pthread_rwlock_wrlock": "intptr_t __pthread_rwlock_wrlock(void)",
     }
     for name in sorted(func_refs):
         # 数据符号 / 已知 DATA 符号不在函数段声明（避免 redeclared as different kind）
