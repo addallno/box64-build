@@ -622,6 +622,8 @@ SMART_EXTRA = {
     "wcstod_l":   "double wcstod_l(const wchar_t* nptr, wchar_t** endptr, void* loc) { (void)loc; return wcstod(nptr, endptr); }",
     "wcstold_l":  "long double wcstold_l(const wchar_t* nptr, wchar_t** endptr, void* loc) { (void)loc; return wcstold(nptr, endptr); }",
     # ---- LFS64 接口：musl 全是宏/无符号，转发到 64 位等价实现 ----
+    # alphasort64：steamcmd 等 x86 程序经 GLOB_DAT 引用，必须保留符号名
+    "alphasort64":  "int alphasort64(const struct dirent **a, const struct dirent **b) { return alphasort(a, b); }",
     "getdents64":   "long getdents64(int fd, void* dirp, size_t count) { return syscall(SYS_getdents64, fd, dirp, count); }",
     "getdirentries64": "ssize_t getdirentries64(int fd, void* buf, size_t n, off_t* basep) { (void)basep; return syscall(SYS_getdents64, fd, buf, n); }",
     "readdir64":    "void* readdir64(void* dirp) { return readdir((DIR*)dirp); }",

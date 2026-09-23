@@ -32,9 +32,11 @@ REPL = {  # 优先匹配更长的 f 变体
     "readdir64_r(": "readdir_r(",
     # glibc 内部类型别名，musl 用同名公共类型（布局一致）
     "__sigset_t": "sigset_t",
-    # LFS64 函数：musl 无单独的 64 位目录遍历函数（本就 64 位），
-    # alphasort64 不是 wrappedlibctypes.h 的 struct 成员，安全替换
-    "alphasort64": "alphasort",
+    # 注意：不要全局替换裸标识符 alphasort64——它会破坏
+    # wrappedlibc_private.h 的 GOW(alphasort64) 符号表条目，
+    # 导致 x86 程序 GLOB_DAT alphasort64 解析失败。
+    # 调用点改用 patch_wrappedlibc_c / patch_wrapped32_libc_c 的定向替换；
+    # 符号地址由 gen-libc-stubs.py 的 SMART_EXTRA 转发 stub 提供。
     # glibc 的 _NP 初始化宏 → 无后缀占位（musl 无 ERRORCHECK/RECURSIVE 静态初始化宏，
     # 实际值由 build 脚本 CFLAGS 注入，见 PTHREAD_MUTEX_INITIALIZER_* 定义）
     "PTHREAD_ERRORCHECK_MUTEX_INITIALIZER_NP": "PTHREAD_ERRORCHECK_MUTEX_INITIALIZER",
