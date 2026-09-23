@@ -415,10 +415,10 @@ def parse_box32_sigs(*scan_dirs) -> dict:
             # EXPORT R my32___##N##_finite P 因含 ## 被 head_re 跳过，
             # 若不补录签名，path4 会生成 extern void(name)(void) 与真实定义冲突
             _FINITE_MACROS = {
-                "F1F": ("float", "(float a)"),
-                "F1D": ("double", "(double a)"),
-                "F2F": ("float", "(float a, float b)"),
-                "F2D": ("double", "(double a, double b)"),
+                "F1F": ("float", "float a"),
+                "F1D": ("double", "double a"),
+                "F2F": ("float", "float a, float b"),
+                "F2D": ("double", "double a, double b"),
             }
             finite_call_re = re.compile(
                 r"^(F1F|F1D|F2F|F2D)\(([A-Za-z0-9_]+)\)\s*$", re.M)
