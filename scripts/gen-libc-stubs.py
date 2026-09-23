@@ -860,20 +860,70 @@ def _is_safe_shared_sig(ret: str, params: str) -> bool:
     """判断签名是否可安全写入共享头 glibc_missing_symbols.h。
 
     共享头被所有 TU include，只允许出现各处可见的通用类型。
-    含 FT_/SDL_/X11/*_32_t 等 TU 局部类型 → 不安全，应跳过声明。
+    规则（白名单+黑名单混合）：
+    - 大写开头标识符（CURLSHoption/XID/EventHandler/BDF_*）一律拒绝，
+      除显式白名单（FILE）
+    - 已知 TU 局部前缀/后缀（FT_/SDL_/my_/i386_/*_32/*_32_t/x86emu_t）拒绝
+    - struct/union/enum 标签名同样检查
+    不安全 → 跳过声明（定义所在 TU 已有定义，其他 TU 不引用该符号）。
     """
-    text = f"{ret} {params}"
-    unsafe = re.compile(
-        r"\b("
-        r"FT_\w+|SDL_\w+|BDF_\w+|PS_PrivateRec_32_t|PS_FontInfoRec_32_t|"
-        r"XID\w*|XErrorHandler|XIOErrorHandler|XImage_32|EventHandler|"
-        r"fcvalue_32_t|my_\w+|"
-        r"\w+_32_t\b|"
-        r"x86emu_t|posix_spawn_file_actions_32_t|"
-        r"my_sem_32_t|my_DBus\w*|my_XFontSet\w*|my_Visual\w*"
-        r")\b"
-    )
-    return not unsafe.search(text)
+    _SAFE_UPPER = {"FILE"}
+
+    def _idents(s: str) -> list:
+        return re.findall(r"[A-Za-z_]\w*", s)
+
+    def _ok_type_token(t: str) -> bool:
+        if t in ("struct", "union", "enum", "const", "volatile",
+                 "unsigned", "signed", "static", "extern", "inline",
+                 "restrict", "__attribute__", "__extension__"):
+            return True
+        if t[0].isupper():
+            return t in _SAFE_UPPER
+        if re.match(r"^(FT_|SDL_|BDF_|PS_|my_|i386_|x86emu)", t):
+            return False
+        if re.search(r"_32(_t)?$", t) or t.endswith("_32_t"):
+            return False
+        if t in ("posix_spawn_file_actions_32_t", "fcvalue_32_t",
+                 "EventHandler", "CURLSHoption"):
+            return False
+        return True
+
+    def _check_toks(toks: list) -> bool:
+        i = 0
+        while i < len(toks):
+            t = toks[i]
+            if t in ("struct", "union", "enum"):
+                if i + 1 >= len(toks):
+                    return False
+                if not _ok_type_token(toks[i + 1]) and toks[i + 1][0].isupper() is False:
+                    # 标签名走同一套规则（大写需白名单，前缀黑名单拒绝）
+                    if not _ok_type_token(toks[i + 1]):
+                        return False
+                elif toks[i + 1][0].isupper() and toks[i + 1] not in _SAFE_UPPER:
+                    return False
+                elif not _ok_type_token(toks[i + 1]):
+                    return False
+                i += 2
+                continue
+            if not _ok_type_token(t):
+                return False
+            i += 1
+        return True
+
+    if not _check_toks(_idents(ret)):
+        return False
+    p = (params or "").strip()
+    if not p or p == "void":
+        return True
+    for part in p.split(","):
+        part = re.sub(r"\[[^\]]*\]", "", part)
+        toks = _idents(part)
+        if not toks:
+            continue
+        type_toks = toks[:-1] if len(toks) > 1 else toks
+        if not _check_toks(type_toks):
+            return False
+    return True
 
 
 def generate_header(func_refs, data_refs, sigs, smart, out_path,
