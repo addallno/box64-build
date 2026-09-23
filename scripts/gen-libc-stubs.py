@@ -335,6 +335,156 @@ def parse_static_libc_symbols(h_path: str) -> set:
     return syms
 
 
+def parse_box32_sigs(wrapped32_dir: str) -> dict:
+    """扫描 src/wrapped32/*.c 中 my32_* 函数定义，返回 {name: (ret, params)}。
+
+    供 generate_header 为已有本地定义的 my32_ 生成兼容签名，避免 conflicting types。
+    """
+    sigs = {}
+    if not os.path.isdir(wrapped32_dir):
+        return sigs
+    # 匹配: [EXPORT] ret name(params) {  或 EXPORT ret name(params) ...
+    pat = re.compile(
+        r"^(?:static\s+|EXPORT\s+)?"
+        r"((?:const\s+)?[A-Za-z_][\w\s\*]*?)\s+"
+        r"(my32_[A-Za-z0-9_]+)\s*\(([^)]*)\)")
+    for fn in sorted(os.listdir(wrapped32_dir)):
+        if not fn.endswith(".c"):
+            continue
+        path = os.path.join(wrapped32_dir, fn)
+        try:
+            for line in open(path, encoding="utf-8", errors="replace"):
+                if line.startswith("#"):
+                    continue
+                m = pat.match(line.rstrip("\n"))
+                if not m:
+                    continue
+                # 只取定义行（含 {）或 EXPORT 声明
+                if "{" not in line and "EXPORT" not in line:
+                    continue
+                ret = m.group(1).replace("EXPORT", "").strip()
+                name = m.group(2)
+                params = re.sub(r"\bEXPORT\b", "", m.group(3)).strip()
+                if ret in ("", "static") or "##" in name or "##" in params:
+                    continue
+                # 保留更长参数的签名（更完整）
+                if name not in sigs or len(params) > len(sigs[name][1]):
+                    sigs[name] = (ret, params)
+        except OSError:
+            continue
+    return sigs
+
+
+def scan_go2_my_targets(box64_src: str) -> set:
+    """扫描所有 wrapped*_private.h 中 GO2/GOW2 的 my_* 映射目标。"""
+    targets = set()
+    re_go2 = re.compile(
+        r"GO(?:W)?2\([^,]+,\s*[^,]+,\s*(my_[A-Za-z0-9_]+)\s*\)")
+    for sub in ("wrapped", "wrapped32"):
+        d = os.path.join(box64_src, "src", sub)
+        if not os.path.isdir(d):
+            continue
+        for fn in os.listdir(d):
+            if not fn.endswith("_private.h"):
+                continue
+            try:
+                text = open(os.path.join(d, fn),
+                            encoding="utf-8", errors="replace").read()
+            except OSError:
+                continue
+            targets.update(re_go2.findall(text))
+    return targets
+
+
+def parse_my64_sigs(box64_src: str) -> dict:
+    """扫描 src/wrapped/*.c 中 my_* 函数定义签名（供 init32 注入）。"""
+    sigs = {}
+    wrapped_dir = os.path.join(box64_src, "src", "wrapped")
+    if not os.path.isdir(wrapped_dir):
+        return sigs
+    pat = re.compile(
+        r"^(?:static\s+|EXPORT\s+)?"
+        r"((?:const\s+)?[A-Za-z_][\w\s\*]*?)\s+"
+        r"(my_[A-Za-z0-9_]+)\s*\(([^)]*)\)")
+    for fn in sorted(os.listdir(wrapped_dir)):
+        if not fn.endswith(".c"):
+            continue
+        path = os.path.join(wrapped_dir, fn)
+        try:
+            for line in open(path, encoding="utf-8", errors="replace"):
+                if line.startswith("#"):
+                    continue
+                m = pat.match(line.rstrip("\n"))
+                if not m:
+                    continue
+                if "{" not in line and "EXPORT" not in line:
+                    continue
+                ret = m.group(1).replace("EXPORT", "").strip()
+                name = m.group(2)
+                params = re.sub(r"\bEXPORT\b", "", m.group(3)).strip()
+                if ret in ("", "static") or "##" in name:
+                    continue
+                if name not in sigs or len(params) > len(sigs[name][1]):
+                    sigs[name] = (ret, params)
+        except OSError:
+            continue
+    return sigs
+
+
+def inject_my64_decls_into_init32(box64_src: str) -> int:
+    """在 wrappedlib_init32.h 中注入 GO2 目标 my_* 的 extern 声明。
+    注入到 #include "glibc_missing_symbols.h" 之后（类型头已可见）。
+    my_* 定义在64位 wrapped/*.c，不进共享 glibc_missing_symbols.h（避免64位冲突）。
+    """
+    init32 = os.path.join(box64_src, "src", "wrapped32", "wrappedlib_init32.h")
+    if not os.path.isfile(init32):
+        print(f"[init32] 跳过（不存在）: {init32}")
+        return 0
+    text = open(init32, encoding="utf-8").read()
+    marker = '#include "glibc_missing_symbols.h"'
+    if "my64_decls_begin" in text:
+        print("[init32] my_* 声明已注入")
+        return 0
+    if marker not in text:
+        print("[init32] 警告: 未找到 glibc_missing_symbols.h include，改用 debug.h 锚点")
+        marker = '#include "debug.h"'
+        if marker not in text:
+            print("[init32] 警告: 无可用锚点，跳过 my_* 注入")
+            return 0
+
+    targets = scan_go2_my_targets(box64_src)
+    if not targets:
+        print("[init32] 未找到 GO2 my_* 目标")
+        return 0
+    my64 = parse_my64_sigs(box64_src)
+    lines = [
+        "/* my64_decls_begin: GO2 目标 my_* 声明（定义在64位 wrapped/*.c） */",
+    ]
+    # 无已知定义的目标：仍声明 void(void)（仅取地址；weak stub 或强定义在链接期解析）
+    fallback = {
+        "my_signal": ("sighandler_t", "int, sighandler_t"),
+        "my___sysv_signal": ("sighandler_t", "int, sighandler_t"),
+        "my_on_exit": ("int", "void*, int, void*"),
+    }
+    for name in sorted(targets):
+        if name in my64:
+            ret, params = my64[name]
+        elif name in fallback:
+            ret, params = fallback[name]
+        else:
+            ret, params = "void", ""
+        if not params or params.strip() == "void":
+            lines.append(f"extern {ret} {name}(void);")
+        else:
+            lines.append(f"extern {ret} {name}({params});")
+    lines.append("/* my64_decls_end */")
+    block = "\n".join(lines) + "\n\n"
+    text = text.replace(marker, block + marker, 1)
+    open(init32, "w", encoding="utf-8").write(text)
+    print(f"[init32] 已注入 {len(targets)} 个 my_* 声明")
+    return len(targets)
+
+
 # ------------------------------------------------------------- 智能数学 stub
 
 # 数学判定符号：glibc 导出函数，musl 用宏实现（无符号）。
@@ -572,6 +722,12 @@ typedef pid_t __pid_t;
 typedef void (*__sighandler_t)(int);
 #define __sigset_t sigset_t
 
+/* box64 static_libc.h：slc 符号（__fgets_chk/capget 等）的声明来源。
+ * 头文件带 include guard，64位 wrappedlibc.c 先 include 本头时不受影响；
+ * wrapped32 不直接 include static_libc.h，经此注入获得 slc 声明。
+ * 路径经 CMake include_directories(${BOX64_ROOT}/src) 解析。 */
+#include "libtools/static_libc.h"
+
 /* 补充头文件：与 build-box64-musl.sh 中 all_musl_headers.c 对齐，
  * 确保 decls（从 gcc -E 提取的 musl 头文件符号）对应的头文件实际被 include。
  * 若此处缺失某个头文件，则 decls 中该头文件的符号会被跳过声明，
@@ -701,7 +857,8 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
                     musl_header_decls=None,
                     musl_macros=None,
                     static_libc_syms=None,
-                    musl_syms=None):
+                    musl_syms=None,
+                    box32_sigs=None):
     """生成 extern 声明头文件。
 
     五路过滤策略（最小化与 musl/box64 头文件的类型冲突）:
@@ -753,11 +910,14 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
     }
 
     # 过滤 dummy_* 假符号（wrappedlibc_private.h 中的特殊条目，非真实 C 函数）
-    # 过滤 my_* 和 my32_* 符号（box64 wrapper 函数，定义在各自 .c 文件中，不应出现在 header 中）
-    func_refs = {n for n in func_refs if not n.startswith("dummy_") and not n.startswith("my_") and not n.startswith("my32_")}
+    # 过滤 my_*（64位 wrapper，定义在 wrapped/*.c；wrapped32 经 init32.h 单独注入声明）
+    # 保留 my32_*：wrapped32 GOM→&my32_N 需 header 声明 + weak stub（多数无定义）
+    func_refs = {n for n in func_refs if not n.startswith("dummy_") and not n.startswith("my_")}
+
+    box32_sigs = box32_sigs or {}
 
     print(f"[header] 输入: func_refs={len(func_refs)}, decls={len(decls)}, "
-          f"macros={len(macros)}, static_libc={len(slc_syms)}")
+          f"macros={len(macros)}, static_libc={len(slc_syms)}, box32_sigs={len(box32_sigs)}")
 
     lines.append("/* ================= 函数声明 ================= */")
     declared = 0
@@ -765,7 +925,8 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
     skipped_slc = 0
     # musl 头文件已声明但 gcc -E 提取可能遗漏的函数（musl 内部实现/条件声明）
     _KNOWN_MUSL_DECLS = {
-        "arc4random", "arc4random_buf", "arc4random_uniform",
+        # arc4random/malloc_usable_size/res_nquery/__pthread_* 等已移除：
+        # musl 头未对 wrapped32 可见声明，留在集合会导致 GO() 取地址 undeclared
         "__fdelt_chk", "__xpg_basename", "dn_skipname",
         "fts_close", "fts_open", "fts_set", "fts_children", "fts_read",
         "open_tree", "move_mount", "fsmount", "fsopen", "fsconfig",
@@ -781,12 +942,12 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
         "eventfd", "eventfd_read", "eventfd_write",
         "fanotify_init", "fanotify_mark",
         "klogctl", "quotactl", "reboot",
-        "malloc_usable_size", "flock", "_flushlbf",
+        "flock", "_flushlbf",
         # __res_close/__res_iclose/__res_ninit/__res_nclose: musl resolv.h 不公开声明，
         # 必须由本头文件提供 extern 声明，否则 wrappedlibresolv_private.h 中 GO() 取地址报 undeclared
-        "__assert_fail", "__bzero",
-        "capget", "capset", "gnu_dev_major", "gnu_dev_makedev", "gnu_dev_minor",
-        "_IO_getc", "_IO_putc",
+        "__assert_fail",
+        # capget/capset/__bzero/gnu_dev_*/_IO_* 在 static_libc.h，由 slc_syms 跳过；
+        # wrapped32 经 glibc_missing_symbols.h include static_libc.h 获得声明
         "fmtmsg", "ftime",
         "__progname", "__progname_full",
         "openpty",
@@ -797,15 +958,12 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
         "__pthread_cond_init", "__pthread_cond_wait",
         "__pthread_cond_timedwait", "__pthread_cond_signal",
         "__pthread_cond_broadcast", "__pthread_cond_destroy",
-        "__pthread_rwlock_init", "__pthread_rwlock_rdlock",
-        "__pthread_rwlock_wrlock", "__pthread_rwlock_unlock",
+        "__pthread_rwlock_init",
         "__pthread_rwlock_tryrdlock", "__pthread_rwlock_trywrlock",
         "__pthread_rwlock_destroy",
         "__pthread_key_create", "__pthread_key_delete",
-        "__pthread_getspecific", "__pthread_setspecific",
         "pthread_mutexattr_getkind_np", "pthread_mutexattr_setkind_np",
-        "__pthread_mutexattr_destroy", "__pthread_mutexattr_init",
-        "__pthread_mutexattr_settype",
+        "__pthread_mutexattr_init",
         "sem_close", "sem_destroy", "sem_getvalue", "sem_init",
         "sem_open", "sem_post", "sem_timedwait", "sem_trywait",
         "sem_unlink", "sem_wait",
@@ -820,8 +978,9 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
         "ns_initparse", "ns_name_uncompress", "ns_parserr",
         "ns_put16", "ns_put32", "ns_skiprr",
         # musl resolv.h 也声明 res_init/res_query/res_search 等
+        # res_nquery/res_nsearch 已移除：musl 未声明，wrapped32 取地址需本头 extern
         "res_init", "res_query", "res_search", "res_querydomain",
-        "res_mkquery", "res_send", "res_nquery", "res_nsearch",
+        "res_mkquery", "res_send",
         "res_nquerydomain", "res_nmkquery", "res_nsend",
         "__res_init", "__res_query", "__res_search",
         "__res_querydomain", "__res_mkquery",
@@ -865,6 +1024,15 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
     # 已有正确签名（void(void*,int)/void(void*)/int(void*)），须走 slc_syms 跳过，不可强制。
     _FORCE_DECLARE = {
         "__res_close",
+        # C类：musl 公共头/可见 include 均未对 wrapped32 提供声明，
+        # 但 decls（gcc -E 全文标识符）误收 → 必须强制声明覆盖 decls 跳过。
+        # slc 符号（__bzero/capget/capset/_IO_*/gnu_dev_*）不经此路，
+        # 由 glibc_missing_symbols.h → static_libc.h 提供。
+        "arc4random", "arc4random_buf", "malloc_usable_size", "res_nquery",
+        "__pthread_getspecific", "__pthread_setspecific",
+        "__pthread_mutexattr_destroy", "__pthread_mutexattr_settype",
+        "__pthread_rwlock_rdlock", "__pthread_rwlock_unlock",
+        "__pthread_rwlock_wrlock",
     }
     for name in sorted(func_refs):
         # 数据符号 / 已知 DATA 符号不在函数段声明（避免 redeclared as different kind）
@@ -921,9 +1089,17 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
             undefed += 1
         # 第四路：完全缺失的符号 → extern 声明
         # 仅当符号不在 decls 中时才生成（decls 来自 musl 头文件预处理提取）
-        # 同时检查 my_ 前缀（box64 wrapper 函数，由 static_libc.h 提供定义）
+        # my32_*：有 box32_sigs 用真实签名（避免与 wrapped32 本地定义 conflicting types），
+        # 无定义用 void 签名 + weak stub
         if name not in decls:
-            lines.append(f"extern void {name}(void);")
+            if name.startswith("my32_") and name in box32_sigs:
+                ret, params = box32_sigs[name]
+                if not params or params.strip() == "void":
+                    lines.append(f"extern {ret} {name}(void);")
+                else:
+                    lines.append(f"extern {ret} {name}({params});")
+            else:
+                lines.append(f"extern void {name}(void);")
             declared += 1
     print(f"[header] 函数: undef={undefed}, 声明={declared}, "
           f"跳过(static_libc)={skipped_slc}, "
@@ -1030,9 +1206,12 @@ def main():
             data_refs.update(extra_data)
     sigs = parse_static_libc_signatures(slh)
     static_libc_syms = parse_static_libc_symbols(slh)
+    # my32_ 本地定义签名（header 声明须兼容，避免 conflicting types）
+    box32_sigs = parse_box32_sigs(wrapped32_dir) if os.path.isdir(wrapped32_dir) else {}
     if args.verbose:
         print(f"[box64] 引用函数 {len(func_refs)}、数据 {len(data_refs)}、"
-              f"static_libc.h 签名 {len(sigs)}、定义+声明 {len(static_libc_syms)}")
+              f"static_libc.h 签名 {len(sigs)}、定义+声明 {len(static_libc_syms)}、"
+              f"my32_ 签名 {len(box32_sigs)}")
 
     # 3. 差集
     missing_funcs = {s for s in func_refs if s not in musl_syms}
@@ -1077,7 +1256,11 @@ def main():
                               musl_header_decls=musl_header_decls,
                               musl_macros=musl_macros,
                               static_libc_syms=static_libc_syms,
-                              musl_syms=musl_syms)
+                              musl_syms=musl_syms,
+                              box32_sigs=box32_sigs)
+
+    # 注入 GO2 目标 my_* 声明到 wrappedlib_init32.h（须在 patch 注入 glibc_missing 之后）
+    inject_my64_decls_into_init32(args.box64_src)
 
     print(f"[生成] 输出 {args.output}（{nlines} 行）")
     print(f"[生成] 输出 {h_path}（{h_lines} 行）")

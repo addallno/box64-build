@@ -90,12 +90,40 @@ STATIC_LIBC_FIXES = {
 
 
 def patch_static_libc_h(s: str):
-    """static_libc.h：修正 __assert_fail/__res_state 错误签名，消除与 musl 头冲突。"""
+    """static_libc.h：修正错误签名 + 加 include guard + 函数定义 static 化。
+    wrapped32 也需 include 此头（slc 符号声明），guard 防重复，
+    函数定义 static 化避免多 TU 重复定义链接错误。"""
     count = 0
     for old, new in STATIC_LIBC_FIXES.items():
         if old in s:
             s = s.replace(old, new, 1)
             count += 1
+    # include guard
+    if "_BOX64_STATIC_LIBC_H" not in s:
+        guard_open = "#ifndef _BOX64_STATIC_LIBC_H\n#define _BOX64_STATIC_LIBC_H\n"
+        guard_close = "\n#endif /* _BOX64_STATIC_LIBC_H */\n"
+        if s.startswith("// SPDX"):
+            nl = s.find("\n") + 1
+            s = s[:nl] + guard_open + s[nl:]
+        else:
+            s = guard_open + s
+        s = s.rstrip() + guard_close
+        count += 1
+    # 函数定义 → static（允许 wrapped/wrapped32 多 TU include）
+    for old, new in (
+        ("void cfree(void* p) {free(p);}", "static void cfree(void* p) {free(p);}"),
+        ("int __sigaddset(void* a, int b) {return sigaddset(a, b);}",
+         "static int __sigaddset(void* a, int b) {return sigaddset(a, b);}"),
+    ):
+        if old in s and new not in s:
+            s = s.replace(old, new, 1)
+            count += 1
+    # dummy_* 定义 → static
+    import re as _re
+    s2, n = _re.subn(r"^(void\* dummy_)", r"static \1", s, flags=_re.M)
+    if n:
+        s = s2
+        count += n
     return s, count
 
 
