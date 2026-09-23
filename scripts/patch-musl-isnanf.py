@@ -597,7 +597,11 @@ def patch_wrapped32_libc_c(s: str):
         ("glob64(path, flags, errfunc, pg)", "glob(path, flags, errfunc, pg)"),
         ("globfree64(p)", "globfree(p)"),
         # --- alphasort64/scandir64 → alphasort/scandir（不可用 #define，因 wrappedlibctypes.h 有同名成员） ---
+        # musl 无 alphasort64；glibc_missing_symbols.h 在文件末尾才 include，
+        # 此处裸调用需在编译期可见 → 全部定向改名（GOW/GOM 条目名由 private.h 保留）
         ("alphasort64(d, list)", "alphasort(d, list)"),
+        ("return alphasort64;", "return alphasort;"),
+        ("return alphasort64(e1, e2);", "return alphasort(e1, e2);"),
         ("scandir64(dir, &list", "scandir(dir, &list"),
         # --- glob: musl 的 glob_t 无 gl_flags 成员 ---
         ("dst->gl_flags = src->gl_flags;\n", "/* musl glob_t 无 gl_flags，跳过 */\n"),
