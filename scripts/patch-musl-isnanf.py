@@ -523,6 +523,9 @@ def patch_wrappedlibc_c(s: str):
     for old, new in (
         ("return open64(", "return open("),
         ("return fopen64(", "return fopen("),
+        # open_func_fallback 内 *file = fopen64(...)：glibc_missing 在文件末尾 include，
+        # 此处无声明→implicit void→-Wint-conversion；musl 用 fopen 即可
+        ("*file = fopen64(", "*file = fopen("),
         ("return glob64(", "return glob("),
         ("return scandir64(", "return scandir("),
         ("return scandirat64(", "return scandirat("),

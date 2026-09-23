@@ -1151,17 +1151,23 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
     # musl 公共头与 static_libc.h 均未声明 → private.h GO() 取地址必须由本头提供 extern。
     # 仅放两边都缺失的符号；__res_iclose/__res_nclose/__res_ninit 在 static_libc.h
     # 已有正确签名（void(void*,int)/void(void*)/int(void*)），须走 slc_syms 跳过，不可强制。
+    # 值必须是与64位 wrappedlibc.c（syslog.h/malloc.h/本地定义）兼容的正确签名，
+    # 不能一律 void(void)——会与系统头/本地 weak 定义 conflicting types。
     _FORCE_DECLARE = {
-        "__res_close",
-        # arc4random*: musl 可能不声明（需 _GNU_SOURCE 或无实现）→ 强制 extern void
-        # malloc_usable_size: musl malloc.h 有声明但本头故意不 include malloc.h
-        # （mallinfo 冲突）→ decls 含它会 path4 跳过导致 undeclared → FORCE
-        "arc4random", "arc4random_buf", "malloc_usable_size",
-        # syslog.h 已从 _HEADER_DECL 移除（与 wrappedlibc.c extern int vsyslog 冲突）；
-        # closelog/openlog/setlogmask/syslog 不再经 syslog.h 可见 → FORCE
-        # vsyslog 不进 FORCE：wrappedlibc.c 自带 extern int，FORCE void 会冲突
-        "closelog", "openlog", "setlogmask", "syslog",
-        "res_nquery",
+        "__res_close": "void __res_close(void)",
+        "res_nquery": "void res_nquery(void)",
+        # 64位 wrappedlibc.c L5238 weak 定义 uint32_t arc4random(void)；
+        # musl stdlib.h 无 arc4random → wrapped32 需本头声明
+        "arc4random": "uint32_t arc4random(void)",
+        "arc4random_buf": "void arc4random_buf(void* buf, size_t buflen)",
+        # musl malloc.h:19 size_t(void*)；本头故意不 include malloc.h
+        "malloc_usable_size": "size_t malloc_usable_size(void* ptr)",
+        # musl syslog.h:60-63 签名（wrappedlibc.c L60 include 它）
+        "closelog": "void closelog(void)",
+        "openlog": "void openlog(const char* ident, int option, int facility)",
+        "setlogmask": "int setlogmask(int maskpri)",
+        "syslog": "void syslog(int priority, const char* format, ...)",
+        # vsyslog 不进 FORCE：wrappedlibc.c 自带 extern int
     }
     for name in sorted(func_refs):
         # 数据符号 / 已知 DATA 符号不在函数段声明（避免 redeclared as different kind）
@@ -1174,7 +1180,7 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
                 lines.append(f"#undef {name}")
                 lines.append("#endif")
                 undefed += 1
-            lines.append(f"extern void {name}(void);")
+            lines.append(f"extern {_FORCE_DECLARE[name]};")
             declared += 1
             continue
         # 前置跳过：musl 已知声明/内联/宏（优先级最高，避免与 smart 路径冲突）
