@@ -778,16 +778,27 @@ LIBRESOLV_DROP_LINES = (
     "extern int __res_send(void* a, int b, void* c, int d) {return res_send(a, b, c, d);}",
 )
 LIBRESOLV_MARK = "// box64-build: 与 musl 归档对象重复，由 musl 提供: "
+# __res_send 被 private.h GO(__res_send) 以 &__res_send 取址（wrappedlib_init.h GO 宏），
+# 不能只删定义，须留纯声明满足编译；链接时由 musl res_send.o 提供定义。
+# __dn_expand/__res_mkquery 走 GOM（my___ 转发版取址），注释掉即可。
+LIBRESOLV_RES_SEND_DECL = "extern int __res_send(void* a, int b, void* c, int d); "
 
 
 def patch_wrappedlibresolv_c(s: str):
     """删除与 musl 归档重复的 __dn_expand/__res_mkquery/__res_send wrapper（幂等）。"""
     count = 0
     for line in LIBRESOLV_DROP_LINES:
-        # 原行是注释行的子串，须先排除已注释形式，否则幂等失败
-        if line in s and LIBRESOLV_MARK + line not in s:
-            s = s.replace(line, LIBRESOLV_MARK + line, 1)
-            count += 1
+        if LIBRESOLV_MARK + line in s:
+            continue  # 已注释（原行是注释行的子串，须先查）
+        if line not in s:
+            continue  # 已处理或原行不存在
+        if line.startswith("extern int __res_send"):
+            # __res_send 被 GO 宏取址，留纯声明，定义由 musl res_send.o 提供
+            repl = LIBRESOLV_RES_SEND_DECL + "// box64-build: 定义由 musl res_send.o 提供"
+        else:
+            repl = LIBRESOLV_MARK + line
+        s = s.replace(line, repl, 1)
+        count += 1
     return s, count
 
 
