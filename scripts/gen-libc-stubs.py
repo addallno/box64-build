@@ -782,7 +782,8 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
         "fanotify_init", "fanotify_mark",
         "klogctl", "quotactl", "reboot",
         "malloc_usable_size", "flock", "_flushlbf",
-        "__res_close", "__res_iclose", "__res_ninit", "__res_nclose",
+        # __res_close/__res_iclose/__res_ninit/__res_nclose: musl resolv.h 不公开声明，
+        # 必须由本头文件提供 extern 声明，否则 wrappedlibresolv_private.h 中 GO() 取地址报 undeclared
         "__assert_fail", "__bzero",
         "capget", "capset", "gnu_dev_major", "gnu_dev_makedev", "gnu_dev_minor",
         "_IO_getc", "_IO_putc",
