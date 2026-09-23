@@ -274,9 +274,8 @@ def patch_threads32_c(s: str):
             count += 1
         else:
             print(f"警告: threads32.c 未找到片段: {old.splitlines()[0][:60]}")
-    if THREADS_STUB_PATCH not in s and THREADS_STUB_ANCHOR in s:
-        s = s.replace(THREADS_STUB_ANCHOR, THREADS_STUB_PATCH, 1)
-        count += 1
+    # 注意：affinity stub 只注入 threads.c（box64-build 修复 multiple definition，
+    # threads32.c 的调用由 threads.c 的外部链接定义满足，不可重复注入）
     return s, count
 
 
@@ -769,6 +768,29 @@ def inject_scandirat(root: str):
         print("CMakeLists.txt: 已把 scandirat_glibc.c 加入无条件 ELFLOADER_SRC")
 
 
+# wrappedlibresolv.c 的 STATICBUILD 转发 wrapper 中，与 musl 归档对象重复的 3 个：
+# res_send.o/dn_expand.o/res_mkquery.o 同时定义 __res_send/__dn_expand/__res_mkquery，
+# 且 wrapper 函数体调用无前缀版（res_send 等）正是拉入这些归档对象的原因。
+# 删除 wrapper 后，转发表对 __res_send 等的引用改由 musl 归档对象满足，冲突消除。
+LIBRESOLV_DROP_LINES = (
+    "int __dn_expand(void* a, void* b, void* c, void* d, int e) {return dn_expand(a, b, c, d, e);}",
+    "extern int __res_mkquery(int a, void* b, int c, int d, void* e, int f, void* g, void* h, int i) {return res_mkquery(a, b, c, d, e, f, g, h, i);}",
+    "extern int __res_send(void* a, int b, void* c, int d) {return res_send(a, b, c, d);}",
+)
+LIBRESOLV_MARK = "// box64-build: 与 musl 归档对象重复，由 musl 提供: "
+
+
+def patch_wrappedlibresolv_c(s: str):
+    """删除与 musl 归档重复的 __dn_expand/__res_mkquery/__res_send wrapper（幂等）。"""
+    count = 0
+    for line in LIBRESOLV_DROP_LINES:
+        # 原行是注释行的子串，须先排除已注释形式，否则幂等失败
+        if line in s and LIBRESOLV_MARK + line not in s:
+            s = s.replace(line, LIBRESOLV_MARK + line, 1)
+            count += 1
+    return s, count
+
+
 def patch_mallochook_c(s: str):
     """mallochook.c：STATICBUILD 下的裁剪。
     1. 移除 box_strdup/box_realpath 函数定义（static 下 debug.h 将二者定义为
@@ -1083,6 +1105,9 @@ for dirpath, _dirs, files in os.walk(os.path.join(root, "src")):
                 n += m
         if fn == "mallochook.c":
             new, m = patch_mallochook_c(new)
+            n += m
+        if fn == "wrappedlibresolv.c":
+            new, m = patch_wrappedlibresolv_c(new)
             n += m
         if n:
             with open(path, "w", encoding="utf-8") as f:
