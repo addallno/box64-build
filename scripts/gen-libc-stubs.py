@@ -457,6 +457,16 @@ def inject_my64_decls_into_init32(box64_src: str) -> int:
         print("[init32] 未找到 GO2 my_* 目标")
         return 0
     my64 = parse_my64_sigs(box64_src)
+    # static_*.h 已有真实签名的 my_*：跳过注入（void 会 conflicting types）
+    declared_elsewhere = set()
+    for hname in ("static_threads.h", "static_libc.h"):
+        hp = os.path.join(box64_src, "src", "libtools", hname)
+        if not os.path.isfile(hp):
+            continue
+        for hline in open(hp, encoding="utf-8", errors="replace"):
+            hm = re.match(r"^\s*(?:extern\s+)?\S+\s+(my_\w+)\s*\(", hline)
+            if hm:
+                declared_elsewhere.add(hm.group(1))
     lines = [
         "/* my64_decls_begin: GO2 目标 my_* 声明（定义在64位 wrapped/*.c） */",
     ]
@@ -466,9 +476,16 @@ def inject_my64_decls_into_init32(box64_src: str) -> int:
         "my___sysv_signal": ("sighandler_t", "int, sighandler_t"),
         "my_on_exit": ("int", "void*, int, void*"),
     }
+    skipped = 0
     for name in sorted(targets):
+        if name in declared_elsewhere:
+            skipped += 1
+            continue
         if name in my64:
             ret, params = my64[name]
+            # 不安全类型（x64_va_list_t 等）降级 void，避免 unknown type
+            if not _is_safe_shared_sig(ret, params):
+                ret, params = "void", ""
         elif name in fallback:
             ret, params = fallback[name]
         else:
@@ -481,8 +498,9 @@ def inject_my64_decls_into_init32(box64_src: str) -> int:
     block = "\n".join(lines) + "\n\n"
     text = text.replace(marker, block + marker, 1)
     open(init32, "w", encoding="utf-8").write(text)
-    print(f"[init32] 已注入 {len(targets)} 个 my_* 声明")
-    return len(targets)
+    n = len(targets) - skipped
+    print(f"[init32] 已注入 {n} 个 my_* 声明（跳过 static 已声明 {skipped}）")
+    return n
 
 
 # ------------------------------------------------------------- 智能数学 stub
@@ -879,7 +897,7 @@ def _is_safe_shared_sig(ret: str, params: str) -> bool:
             return True
         if t[0].isupper():
             return t in _SAFE_UPPER
-        if re.match(r"^(FT_|SDL_|BDF_|PS_|my_|i386_|x86emu)", t):
+        if re.match(r"^(FT_|SDL_|BDF_|PS_|my_|i386_|x86emu|x64_va)", t):
             return False
         if re.search(r"_32(_t)?$", t) or t.endswith("_32_t"):
             return False
