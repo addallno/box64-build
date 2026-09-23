@@ -853,6 +853,29 @@ typedef void (*__sighandler_t)(int);
 """
 
 
+# ------------------------------------------------------------- 共享头安全签名
+
+
+def _is_safe_shared_sig(ret: str, params: str) -> bool:
+    """判断签名是否可安全写入共享头 glibc_missing_symbols.h。
+
+    共享头被所有 TU include，只允许出现各处可见的通用类型。
+    含 FT_/SDL_/X11/*_32_t 等 TU 局部类型 → 不安全，应跳过声明。
+    """
+    text = f"{ret} {params}"
+    unsafe = re.compile(
+        r"\b("
+        r"FT_\w+|SDL_\w+|BDF_\w+|PS_PrivateRec_32_t|PS_FontInfoRec_32_t|"
+        r"XID\w*|XErrorHandler|XIOErrorHandler|XImage_32|EventHandler|"
+        r"fcvalue_32_t|my_\w+|"
+        r"\w+_32_t\b|"
+        r"x86emu_t|posix_spawn_file_actions_32_t|"
+        r"my_sem_32_t|my_DBus\w*|my_XFontSet\w*|my_Visual\w*"
+        r")\b"
+    )
+    return not unsafe.search(text)
+
+
 def generate_header(func_refs, data_refs, sigs, smart, out_path,
                     musl_header_decls=None,
                     musl_macros=None,
@@ -925,8 +948,11 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
     skipped_slc = 0
     # musl 头文件已声明但 gcc -E 提取可能遗漏的函数（musl 内部实现/条件声明）
     _KNOWN_MUSL_DECLS = {
-        # arc4random/malloc_usable_size/res_nquery/__pthread_* 等已移除：
-        # musl 头未对 wrapped32 可见声明，留在集合会导致 GO() 取地址 undeclared
+        # arc4random/malloc_usable_size: stdlib.h/malloc.h 已声明（CI conflicting 确认）
+        "arc4random", "arc4random_buf", "malloc_usable_size",
+        # __pthread_mutexattr_*: static_libc.h → static_threads.h 已声明
+        "__pthread_mutexattr_destroy", "__pthread_mutexattr_settype",
+        # 其余 C类历史条目：musl 头未对 wrapped32 可见声明，留在集合会导致 GO() 取地址 undeclared
         "__fdelt_chk", "__xpg_basename", "dn_skipname",
         "fts_close", "fts_open", "fts_set", "fts_children", "fts_read",
         "open_tree", "move_mount", "fsmount", "fsopen", "fsconfig",
@@ -1024,13 +1050,12 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
     # 已有正确签名（void(void*,int)/void(void*)/int(void*)），须走 slc_syms 跳过，不可强制。
     _FORCE_DECLARE = {
         "__res_close",
-        # C类：musl 公共头/可见 include 均未对 wrapped32 提供声明，
-        # 但 decls（gcc -E 全文标识符）误收 → 必须强制声明覆盖 decls 跳过。
-        # slc 符号（__bzero/capget/capset/_IO_*/gnu_dev_*）不经此路，
-        # 由 glibc_missing_symbols.h → static_libc.h 提供。
-        "arc4random", "arc4random_buf", "malloc_usable_size", "res_nquery",
+        # 仅保留确认无前置声明的符号。
+        # arc4random/malloc_usable_size/__pthread_mutexattr_* 已由
+        # stdlib.h/malloc.h/static_threads.h 在本头之前声明 → 须走 _KNOWN 跳过，
+        # FORCE void(void) 会 conflicting types（CI 35823890852 确认）。
+        "res_nquery",
         "__pthread_getspecific", "__pthread_setspecific",
-        "__pthread_mutexattr_destroy", "__pthread_mutexattr_settype",
         "__pthread_rwlock_rdlock", "__pthread_rwlock_unlock",
         "__pthread_rwlock_wrlock",
     }
@@ -1089,18 +1114,22 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
             undefed += 1
         # 第四路：完全缺失的符号 → extern 声明
         # 仅当符号不在 decls 中时才生成（decls 来自 musl 头文件预处理提取）
-        # my32_*：有 box32_sigs 用真实签名（避免与 wrapped32 本地定义 conflicting types），
-        # 无定义用 void 签名 + weak stub
+        # my32_*：仅当签名只含通用类型时用真实签名（避免专有类型在共享头中
+        # unknown type）；含 FT_/SDL_/X11/*_32_t 等专有类型则跳过声明——
+        # 定义所在 TU 在 include 本头前已有定义，其他 TU 不引用该符号。
         if name not in decls:
             if name.startswith("my32_") and name in box32_sigs:
                 ret, params = box32_sigs[name]
-                if not params or params.strip() == "void":
-                    lines.append(f"extern {ret} {name}(void);")
-                else:
-                    lines.append(f"extern {ret} {name}({params});")
+                if _is_safe_shared_sig(ret, params):
+                    if not params or params.strip() == "void":
+                        lines.append(f"extern {ret} {name}(void);")
+                    else:
+                        lines.append(f"extern {ret} {name}({params});")
+                    declared += 1
+                # 不安全签名：跳过（不声明）
             else:
                 lines.append(f"extern void {name}(void);")
-            declared += 1
+                declared += 1
     print(f"[header] 函数: undef={undefed}, 声明={declared}, "
           f"跳过(static_libc)={skipped_slc}, "
           f"跳过(decls)={len(func_refs)-undefed-declared-skipped_slc}")

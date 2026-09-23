@@ -909,8 +909,9 @@ inject_fts(root, include_dir)
 inject_obstack(root, include_dir)
 inject_error(root, include_dir)
 inject_scandirat(root)
-inject_missing_symbols(root)
+# 先注入 glibc_missing include 到 init32，再跑 gen（gen 的 my64 注入需该锚点）
 inject_wrappedlib_init_h(root, include_dir)
+inject_missing_symbols(root)
 if include_dir:
     write_stub_headers(include_dir)
     inject_glibc_headers(include_dir)
