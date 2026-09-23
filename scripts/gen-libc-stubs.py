@@ -1002,6 +1002,11 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
         "arc4random", "arc4random_buf", "malloc_usable_size",
         # __pthread_mutexattr_*: static_libc.h → static_threads.h 已声明
         "__pthread_mutexattr_destroy", "__pthread_mutexattr_settype",
+        # __pthread_getspecific/setspecific/rwlock_*: pthread.h/static_threads.h 已声明
+        # （CI 35825886967 FORCE void 确认 conflicting）
+        "__pthread_getspecific", "__pthread_setspecific",
+        "__pthread_rwlock_rdlock", "__pthread_rwlock_unlock",
+        "__pthread_rwlock_wrlock",
         # 其余 C类历史条目：musl 头未对 wrapped32 可见声明，留在集合会导致 GO() 取地址 undeclared
         "__fdelt_chk", "__xpg_basename", "dn_skipname",
         "fts_close", "fts_open", "fts_set", "fts_children", "fts_read",
@@ -1101,13 +1106,12 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
     _FORCE_DECLARE = {
         "__res_close",
         # 仅保留确认无前置声明的符号。
-        # arc4random/malloc_usable_size/__pthread_mutexattr_* 已由
-        # stdlib.h/malloc.h/static_threads.h 在本头之前声明 → 须走 _KNOWN 跳过，
-        # FORCE void(void) 会 conflicting types（CI 35823890852 确认）。
+        # arc4random/malloc_usable_size/__pthread_mutexattr_* 与
+        # __pthread_getspecific/setspecific/rwlock_* 已由
+        # stdlib.h/malloc.h/static_threads.h/pthread.h 在本头之前声明
+        # → 须走 _KNOWN 跳过，FORCE void(void) 会 conflicting types
+        # （CI 35825300955/35825886967 确认）。
         "res_nquery",
-        "__pthread_getspecific", "__pthread_setspecific",
-        "__pthread_rwlock_rdlock", "__pthread_rwlock_unlock",
-        "__pthread_rwlock_wrlock",
     }
     for name in sorted(func_refs):
         # 数据符号 / 已知 DATA 符号不在函数段声明（避免 redeclared as different kind）
