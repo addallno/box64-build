@@ -1034,6 +1034,40 @@ def patch_wrapped32_ldlinux_c(s: str):
     return s, 0
 
 
+# ---- wrappedlib_init.h 专项：symbol2map STATICBUILD 下 resolved 须为 0 ----
+# 上游在 STATICBUILD 初始化 symbol2map 时写 resolved=1，导致首次查找
+# 跳过 AddCheckBridge，GOT 直接拿到裸 native 函数地址（如 my_realpath），
+# 模拟 x86 call 过去 SIGSEGV（RIP=0x349ba170 一类）。symbolmap 路径
+# 正确地初始化为 resolved=0，symbol2map 对齐即可。
+WRAPPEDLIB_INIT_SYMBOL2_OLD = """\
+        kh_value(lib->w.symbol2map, k).weak = MAPNAME(symbol2map)[i].weak;
+        #ifdef STATICBUILD
+        kh_value(lib->w.symbol2map, k).resolved = 1;
+        kh_value(lib->w.symbol2map, k).addr = (uintptr_t)MAPNAME(symbol2map)[i].addr;
+        #else
+        kh_value(lib->w.symbol2map, k).resolved = 0;
+        #endif
+"""
+WRAPPEDLIB_INIT_SYMBOL2_NEW = """\
+        kh_value(lib->w.symbol2map, k).weak = MAPNAME(symbol2map)[i].weak;
+        kh_value(lib->w.symbol2map, k).resolved = 0;
+        #ifdef STATICBUILD
+        kh_value(lib->w.symbol2map, k).addr = (uintptr_t)MAPNAME(symbol2map)[i].addr;
+        #endif
+"""
+
+
+def patch_wrappedlib_init_h(s: str):
+    """wrappedlib_init.h：symbol2map resolved=1 → 0（修复 native 直跳崩溃）。"""
+    if WRAPPEDLIB_INIT_SYMBOL2_OLD in s:
+        return s.replace(WRAPPEDLIB_INIT_SYMBOL2_OLD, WRAPPEDLIB_INIT_SYMBOL2_NEW, 1), 1
+    # 已打过补丁或上游已改，幂等跳过
+    if WRAPPEDLIB_INIT_SYMBOL2_NEW in s:
+        return s, 0
+    print("警告: wrappedlib_init.h 未找到 symbol2map resolved 锚点", file=sys.stderr)
+    return s, 0
+
+
 root = sys.argv[1]
 include_dir = sys.argv[2] if len(sys.argv) > 2 else None
 
@@ -1125,6 +1159,9 @@ for dirpath, _dirs, files in os.walk(os.path.join(root, "src")):
             n += m
         if fn == "wrappedlibresolv.c":
             new, m = patch_wrappedlibresolv_c(new)
+            n += m
+        if fn == "wrappedlib_init.h":
+            new, m = patch_wrappedlib_init_h(new)
             n += m
         if n:
             with open(path, "w", encoding="utf-8") as f:
