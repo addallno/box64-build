@@ -860,9 +860,11 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
         "__wcstold_l",
     }
     # 强制声明：decls 是 gcc -E 全文标识符（含字符串/未用宏展开残留），非真实声明；
-    # musl 公共头未声明、static_libc.h 也无 → private.h GO() 取地址必须由本头提供 extern。
+    # musl 公共头与 static_libc.h 均未声明 → private.h GO() 取地址必须由本头提供 extern。
+    # 仅放两边都缺失的符号；__res_iclose/__res_nclose/__res_ninit 在 static_libc.h
+    # 已有正确签名（void(void*,int)/void(void*)/int(void*)），须走 slc_syms 跳过，不可强制。
     _FORCE_DECLARE = {
-        "__res_close", "__res_iclose", "__res_ninit", "__res_nclose",
+        "__res_close",
     }
     for name in sorted(func_refs):
         # 数据符号 / 已知 DATA 符号不在函数段声明（避免 redeclared as different kind）
