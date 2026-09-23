@@ -401,13 +401,18 @@ def parse_box32_sigs(*scan_dirs) -> dict:
                 # （避免同名声明覆盖定义，如 makecontext void*→int32_t*）
                 is_def = "{" in after.split(";")[0]
                 if name not in sigs:
-                    sigs[name] = (ret, params, is_def)
-                elif is_def and not sigs[name][2]:
-                    sigs[name] = (ret, params, is_def)
-                elif is_def == sigs[name][2] and len(params) > len(sigs[name][1]):
-                    sigs[name] = (ret, params, is_def)
-    # 规范为 {name: (ret, params)} 二元组（丢弃 is_def 标记）
-    return {n: (v[0], v[1]) for n, v in sigs.items()}
+                    sigs[name] = [ret, params, is_def, False]
+                else:
+                    cur = sigs[name]
+                    # 同名 def/decl 参数不一致 → 标记冲突（共享头须用无参声明）
+                    if params != cur[1] and is_def != cur[2]:
+                        cur[3] = True
+                    if is_def and not cur[2]:
+                        cur[0], cur[1], cur[2] = ret, params, is_def
+                    elif is_def == cur[2] and len(params) > len(cur[1]):
+                        cur[0], cur[1] = ret, params
+    # 规范为 {name: (ret, params, conflict)} 三元组
+    return {n: (v[0], v[1], v[3]) for n, v in sigs.items()}
 
 
 def scan_go2_my_targets(box64_src: str) -> set:
@@ -1237,8 +1242,14 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
         # 定义所在 TU 在 include 本头前已有定义，其他 TU 不引用该符号。
         if name not in decls:
             if name.startswith("my32_") and name in box32_sigs:
-                ret, params = box32_sigs[name]
-                if _is_safe_shared_sig(ret, params):
+                ret, params, conflict = box32_sigs[name]
+                # def/decl 签名冲突（如 makecontext void* vs int32_t*）：
+                # 共享头用无参声明，与任意原型兼容，避免与 wrappedlibc.c 前向声明冲突
+                if conflict:
+                    safe_ret = ret if _is_safe_shared_sig(ret, "") else "unsigned long"
+                    lines.append(f"extern {safe_ret} {name}();")
+                    declared += 1
+                elif _is_safe_shared_sig(ret, params):
                     if not params or params.strip() == "void":
                         lines.append(f"extern {ret} {name}(void);")
                     else:
