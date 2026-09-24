@@ -1212,6 +1212,118 @@ def patch_functions_list_txt(s: str):
     return s, 0
 
 
+# x64 get/set_robust_list：宿主 Android 内核返回 ENOSYS/EPERM，
+# steamclient.so 断言 "futex robust_list not initialized by pthreads" 后写 [0] 崩溃。
+# 与 x86syscall_32.c case 312 同样伪造 head（len=0x18, futex_offset=-0x20）。
+X64_ROBUST_TABLE_OLD = (
+    "    [273] = {__NR_set_robust_list, 2},\n"
+    "    [274] = {__NR_get_robust_list, 3},"
+)
+X64_ROBUST_TABLE_NEW = (
+    "    // box64-build: 宿主无 robust futex，改由 switch 伪造（见 case 273/274）\n"
+    "    // [273] = {__NR_set_robust_list, 2},\n"
+    "    // [274] = {__NR_get_robust_list, 3},"
+)
+
+X64_ROBUST_LINUX_ANCHOR = (
+    '        case 267:   // sys_readlinkat\n'
+    '            if(log) snprintf(buff2, 127, " [sys_readlinkat(%d, \\"%s\\"...]", S_EDI, (char*)R_RSI);\n'
+    '            S_RAX = my_readlinkat(emu, S_EDI, (void*)R_RSI, (void*)R_RDX, R_R10);\n'
+    '            if(S_RAX==-1)\n'
+    '                S_RAX = -errno;\n'
+    '            break;\n'
+)
+X64_ROBUST_LINUX_INSERT = (
+    '        case 273: // sys_set_robust_list\n'
+    '            // 宿主 Android 返回 EPERM，伪造成功（guest 不依赖内核态 robust 列表）\n'
+    '            S_RAX = 0;\n'
+    '            break;\n'
+    '        case 274: // sys_get_robust_list\n'
+    '            {\n'
+    '                static struct {\n'
+    '                    uintptr_t next;\n'
+    '                    long futex_offset;\n'
+    '                    long list_op_pending;\n'
+    '                } rh;\n'
+    '                // 先试真实 syscall；ENOSYS/EPERM 或 head 为空时伪造\n'
+    '                long ret = syscall(__NR_get_robust_list, (int)R_RDI,\n'
+    '                    (void*)R_RSI, (size_t*)R_RDX);\n'
+    '                int bad = (ret == -1) || (R_RSI && (*(uintptr_t*)R_RSI == 0));\n'
+    '                if(bad) {\n'
+    '                    rh.next = (uintptr_t)&rh;\n'
+    '                    rh.futex_offset = -0x20;\n'
+    '                    rh.list_op_pending = 0;\n'
+    '                    if(R_RSI) *(uintptr_t*)R_RSI = (uintptr_t)&rh;\n'
+    '                    if(R_RDX) *(size_t*)R_RDX = sizeof(rh);\n'
+    '                    ret = 0;\n'
+    '                }\n'
+    '                S_RAX = (ret == -1) ? -errno : ret;\n'
+    '            }\n'
+    '            break;\n'
+)
+
+X64_ROBUST_MYSC_ANCHOR = (
+    '        case 267:   // sys_readlinkat\n'
+    '            return my_readlinkat(emu, S_RSI, (void*)R_RDX, (void*)R_RCX, R_R8);\n'
+)
+X64_ROBUST_MYSC_INSERT = (
+    '        case 273: // sys_set_robust_list（libc syscall 路径）\n'
+    '            return 0;\n'
+    '        case 274: // sys_get_robust_list（libc syscall 路径）\n'
+    '            {\n'
+    '                static struct {\n'
+    '                    uintptr_t next;\n'
+    '                    long futex_offset;\n'
+    '                    long list_op_pending;\n'
+    '                } rh;\n'
+    '                long ret = syscall(__NR_get_robust_list, (int)R_RSI,\n'
+    '                    (void*)R_RDX, (size_t*)R_RCX);\n'
+    '                int bad = (ret == -1) || (R_RDX && (*(uintptr_t*)R_RDX == 0));\n'
+    '                if(bad) {\n'
+    '                    rh.next = (uintptr_t)&rh;\n'
+    '                    rh.futex_offset = -0x20;\n'
+    '                    rh.list_op_pending = 0;\n'
+    '                    if(R_RDX) *(uintptr_t*)R_RDX = (uintptr_t)&rh;\n'
+    '                    if(R_RCX) *(size_t*)R_RCX = sizeof(rh);\n'
+    '                    ret = 0;\n'
+    '                }\n'
+    '                return (ret == -1) ? -errno : ret;\n'
+    '            }\n'
+)
+
+
+def patch_x64syscall_c(s: str):
+    """x64syscall.c：伪造 get/set_robust_list，修复 steamclient 空指写崩溃。"""
+    total = 0
+    if X64_ROBUST_TABLE_OLD in s:
+        s = s.replace(X64_ROBUST_TABLE_OLD, X64_ROBUST_TABLE_NEW, 1)
+        total += 1
+    elif X64_ROBUST_TABLE_NEW not in s:
+        print("警告: x64syscall.c 未找到 robust 表锚点", file=sys.stderr)
+    # 锚点插入后仍保留，必须用插入内容独有标记做幂等判断
+    if "先试真实 syscall" not in s:
+        if X64_ROBUST_LINUX_ANCHOR in s:
+            s = s.replace(
+                X64_ROBUST_LINUX_ANCHOR,
+                X64_ROBUST_LINUX_ANCHOR + X64_ROBUST_LINUX_INSERT,
+                1,
+            )
+            total += 1
+        else:
+            print("警告: x64syscall.c 未找到 x64Syscall_linux robust 锚点", file=sys.stderr)
+    if "sys_get_robust_list（libc syscall 路径）" not in s:
+        if X64_ROBUST_MYSC_ANCHOR in s:
+            s = s.replace(
+                X64_ROBUST_MYSC_ANCHOR,
+                X64_ROBUST_MYSC_ANCHOR + X64_ROBUST_MYSC_INSERT,
+                1,
+            )
+            total += 1
+        else:
+            print("警告: x64syscall.c 未找到 my_syscall robust 锚点", file=sys.stderr)
+    return s, total
+
+
 root = sys.argv[1]
 include_dir = sys.argv[2] if len(sys.argv) > 2 else None
 
@@ -1326,6 +1438,9 @@ for dirpath, _dirs, files in os.walk(os.path.join(root, "src")):
             n += m
         if fn == "wrapper.c" and "generated" in path and "wrapped32" not in path:
             new, m = patch_generated_wrapper_c(new)
+            n += m
+        if fn == "x64syscall.c":
+            new, m = patch_x64syscall_c(new)
             n += m
         if n:
             with open(path, "w", encoding="utf-8") as f:
