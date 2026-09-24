@@ -655,6 +655,27 @@ SMART_EXTRA = {
     "gammaf":    "float gammaf(float x) { return lgammaf(x); }",
     "roundeven": "double roundeven(double x) { return x; }",
     "roundevenf": "float roundevenf(float x) { return x; }",
+    # ---- FORTIFY _chk 系列：musl 无 glibc fortify，必须转发到非 chk 版本 ----
+    # stub{return 0} 会让 guest 拿到 NULL/0 并继续使用（如 strcmp(NULL,...) 直接 SIGSEGV）
+    "__memcpy_chk":   "void* __memcpy_chk(void* d, const void* s, size_t n, size_t dn) { (void)dn; return memcpy(d, s, n); }",
+    "__memmove_chk":  "void* __memmove_chk(void* d, const void* s, size_t n, size_t dn) { (void)dn; return memmove(d, s, n); }",
+    "__mempcpy_chk":  "void* __mempcpy_chk(void* d, const void* s, size_t n, size_t dn) { (void)dn; return (char*)memcpy(d, s, n) + n; }",
+    "__memset_chk":   "void* __memset_chk(void* d, int c, size_t n, size_t dn) { (void)dn; return memset(d, c, n); }",
+    "__strcpy_chk":   "char* __strcpy_chk(char* d, const char* s, size_t dn) { (void)dn; return strcpy(d, s); }",
+    "__strncpy_chk":  "char* __strncpy_chk(char* d, const char* s, size_t n, size_t dn) { (void)dn; return strncpy(d, s, n); }",
+    "__strcat_chk":   "char* __strcat_chk(char* d, const char* s, size_t dn) { (void)dn; return strcat(d, s); }",
+    "__strncat_chk":  "char* __strncat_chk(char* d, const char* s, size_t n, size_t dn) { (void)dn; return strncat(d, s, n); }",
+    "__stpcpy_chk":   "char* __stpcpy_chk(char* d, const char* s, size_t dn) { (void)dn; size_t l = strlen(s); memcpy(d, s, l + 1); return d + l; }",
+    "__stpncpy_chk":  "char* __stpncpy_chk(char* d, const char* s, size_t n, size_t dn) { (void)dn; char* r = stpncpy(d, s, n); return r; }",
+    "__wmemcpy_chk":  "wchar_t* __wmemcpy_chk(wchar_t* d, const wchar_t* s, size_t n, size_t dn) { (void)dn; return wmemcpy(d, s, n); }",
+    "__wmemmove_chk": "wchar_t* __wmemmove_chk(wchar_t* d, const wchar_t* s, size_t n, size_t dn) { (void)dn; return wmemmove(d, s, n); }",
+    "__wmemset_chk":  "wchar_t* __wmemset_chk(wchar_t* d, wchar_t c, size_t n, size_t dn) { (void)dn; return wmemset(d, c, n); }",
+    "__wcscpy_chk":   "wchar_t* __wcscpy_chk(wchar_t* d, const wchar_t* s, size_t dn) { (void)dn; return wcscpy(d, s); }",
+    "__wcsncpy_chk":  "wchar_t* __wcsncpy_chk(wchar_t* d, const wchar_t* s, size_t n, size_t dn) { (void)dn; return wcsncpy(d, s, n); }",
+    "__wcscat_chk":   "wchar_t* __wcscat_chk(wchar_t* d, const wchar_t* s, size_t dn) { (void)dn; return wcscat(d, s); }",
+    "__wcsncat_chk":  "wchar_t* __wcsncat_chk(wchar_t* d, const wchar_t* s, size_t n, size_t dn) { (void)dn; return wcsncat(d, s, n); }",
+    "__getcwd_chk":   "char* __getcwd_chk(char* b, size_t bn, size_t n) { (void)bn; return getcwd(b, n); }",
+    "__fgets_chk":    "char* __fgets_chk(char* s, size_t n, int c, FILE* f, size_t bn) { (void)bn; return fgets(s, c, f); }",
 }
 
 
