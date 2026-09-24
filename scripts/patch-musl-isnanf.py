@@ -1235,29 +1235,23 @@ X64_ROBUST_LINUX_ANCHOR = (
 )
 X64_ROBUST_LINUX_INSERT = (
     '        case 273: // sys_set_robust_list\n'
-    '            // 宿主 Android 返回 EPERM，伪造成功（guest 不依赖内核态 robust 列表）\n'
+    '            // 宿主返回 EPERM/不支持，无条件伪造成功\n'
     '            S_RAX = 0;\n'
     '            break;\n'
     '        case 274: // sys_get_robust_list\n'
     '            {\n'
+    '                // 无条件伪造：native head 的 futex_offset 不是 x64 期望的 -0x20\n'
     '                static struct {\n'
     '                    uintptr_t next;\n'
     '                    long futex_offset;\n'
     '                    long list_op_pending;\n'
-    '                } rh;\n'
-    '                // 先试真实 syscall；ENOSYS/EPERM 或 head 为空时伪造\n'
-    '                long ret = syscall(__NR_get_robust_list, (int)R_RDI,\n'
-    '                    (void*)R_RSI, (size_t*)R_RDX);\n'
-    '                int bad = (ret == -1) || (R_RSI && (*(uintptr_t*)R_RSI == 0));\n'
-    '                if(bad) {\n'
-    '                    rh.next = (uintptr_t)&rh;\n'
-    '                    rh.futex_offset = -0x20;\n'
-    '                    rh.list_op_pending = 0;\n'
-    '                    if(R_RSI) *(uintptr_t*)R_RSI = (uintptr_t)&rh;\n'
-    '                    if(R_RDX) *(size_t*)R_RDX = sizeof(rh);\n'
-    '                    ret = 0;\n'
-    '                }\n'
-    '                S_RAX = (ret == -1) ? -errno : ret;\n'
+    '                } rh = {0};\n'
+    '                rh.next = (uintptr_t)&rh;\n'
+    '                rh.futex_offset = -0x20;\n'
+    '                rh.list_op_pending = 0;\n'
+    '                if(R_RSI) *(uintptr_t*)R_RSI = (uintptr_t)&rh;\n'
+    '                if(R_RDX) *(size_t*)R_RDX = sizeof(rh);\n'
+    '                S_RAX = 0;\n'
     '            }\n'
     '            break;\n'
 )
@@ -1271,23 +1265,18 @@ X64_ROBUST_MYSC_INSERT = (
     '            return 0;\n'
     '        case 274: // sys_get_robust_list（libc syscall 路径）\n'
     '            {\n'
+    '                // 无条件伪造：native head 的 futex_offset 不是 x64 期望的 -0x20\n'
     '                static struct {\n'
     '                    uintptr_t next;\n'
     '                    long futex_offset;\n'
     '                    long list_op_pending;\n'
-    '                } rh;\n'
-    '                long ret = syscall(__NR_get_robust_list, (int)R_RSI,\n'
-    '                    (void*)R_RDX, (size_t*)R_RCX);\n'
-    '                int bad = (ret == -1) || (R_RDX && (*(uintptr_t*)R_RDX == 0));\n'
-    '                if(bad) {\n'
-    '                    rh.next = (uintptr_t)&rh;\n'
-    '                    rh.futex_offset = -0x20;\n'
-    '                    rh.list_op_pending = 0;\n'
-    '                    if(R_RDX) *(uintptr_t*)R_RDX = (uintptr_t)&rh;\n'
-    '                    if(R_RCX) *(size_t*)R_RCX = sizeof(rh);\n'
-    '                    ret = 0;\n'
-    '                }\n'
-    '                return (ret == -1) ? -errno : ret;\n'
+    '                } rh = {0};\n'
+    '                rh.next = (uintptr_t)&rh;\n'
+    '                rh.futex_offset = -0x20;\n'
+    '                rh.list_op_pending = 0;\n'
+    '                if(R_RDX) *(uintptr_t*)R_RDX = (uintptr_t)&rh;\n'
+    '                if(R_RCX) *(size_t*)R_RCX = sizeof(rh);\n'
+    '                return 0;\n'
     '            }\n'
 )
 
@@ -1300,8 +1289,8 @@ def patch_x64syscall_c(s: str):
         total += 1
     elif X64_ROBUST_TABLE_NEW not in s:
         print("警告: x64syscall.c 未找到 robust 表锚点", file=sys.stderr)
-    # 锚点插入后仍保留，必须用插入内容独有标记做幂等判断
-    if "先试真实 syscall" not in s:
+    # 幂等：用 case 行判断（锚点插入后仍保留，新旧 insert 均含此 case 行）
+    if "case 273: // sys_set_robust_list\n" not in s:
         if X64_ROBUST_LINUX_ANCHOR in s:
             s = s.replace(
                 X64_ROBUST_LINUX_ANCHOR,
