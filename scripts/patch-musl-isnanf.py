@@ -1102,6 +1102,116 @@ def patch_wrappedlibc_private_h(s: str):
     return s, 0
 
 
+# ---- generated/wrapper.h|c：把 iFEipup/iFEiipup 提升出 !STATICBUILD 守卫 ----
+# 上游 functions_list.txt 标记 #!defined(STATICBUILD) iFEipup → 预生成
+# wrapper 声明/typedef/函数体均在 #if !defined(STATICBUILD) 内；
+# 上面 private.h 补丁让 STATICBUILD 分支启用 GOM 后引用这两个签名 → undeclared。
+WRAPPER_H_DECL_OLD = """\
+void pFpLLi(x64emu_t *emu, uintptr_t fnc);
+void iFEipup(x64emu_t *emu, uintptr_t fnc);
+void iFEiipup(x64emu_t *emu, uintptr_t fnc);
+void iFEpipppL(x64emu_t *emu, uintptr_t fnc);
+void iFiiULippp(x64emu_t *emu, uintptr_t fnc);
+void lFpLpdddddd(x64emu_t *emu, uintptr_t fnc);
+#endif
+"""
+WRAPPER_H_DECL_NEW = """\
+void pFpLLi(x64emu_t *emu, uintptr_t fnc);
+void iFEpipppL(x64emu_t *emu, uintptr_t fnc);
+void iFiiULippp(x64emu_t *emu, uintptr_t fnc);
+void lFpLpdddddd(x64emu_t *emu, uintptr_t fnc);
+#endif
+void iFEipup(x64emu_t *emu, uintptr_t fnc);
+void iFEiipup(x64emu_t *emu, uintptr_t fnc);
+"""
+WRAPPER_C_TYPEDEF_OLD = """\
+typedef void* (*pFpLLi_t)(void*, uintptr_t, uintptr_t, int32_t);
+typedef int32_t (*iFEipup_t)(x64emu_t*, int32_t, void*, uint32_t, void*);
+typedef int32_t (*iFEiipup_t)(x64emu_t*, int32_t, int32_t, void*, uint32_t, void*);
+typedef int32_t (*iFEpipppL_t)(x64emu_t*, void*, int32_t, void*, void*, void*, uintptr_t);
+typedef int32_t (*iFiiULippp_t)(int32_t, int32_t, uint64_t, uintptr_t, int32_t, void*, void*, void*);
+typedef intptr_t (*lFpLpdddddd_t)(void*, uintptr_t, void*, double, double, double, double, double, double);
+#endif
+"""
+WRAPPER_C_TYPEDEF_NEW = """\
+typedef void* (*pFpLLi_t)(void*, uintptr_t, uintptr_t, int32_t);
+typedef int32_t (*iFEpipppL_t)(x64emu_t*, void*, int32_t, void*, void*, void*, uintptr_t);
+typedef int32_t (*iFiiULippp_t)(int32_t, int32_t, uint64_t, uintptr_t, int32_t, void*, void*, void*);
+typedef intptr_t (*lFpLpdddddd_t)(void*, uintptr_t, void*, double, double, double, double, double, double);
+#endif
+typedef int32_t (*iFEipup_t)(x64emu_t*, int32_t, void*, uint32_t, void*);
+typedef int32_t (*iFEiipup_t)(x64emu_t*, int32_t, int32_t, void*, uint32_t, void*);
+"""
+WRAPPER_C_FN_OLD = """\
+void pFpLLi(x64emu_t *emu, uintptr_t fcn) { pFpLLi_t fn = (pFpLLi_t)fcn; R_RAX=(uintptr_t)fn((void*)R_RDI, (uintptr_t)R_RSI, (uintptr_t)R_RDX, (int32_t)R_RCX); }
+void iFEipup(x64emu_t *emu, uintptr_t fcn) { iFEipup_t fn = (iFEipup_t)fcn; R_RAX=(int)fn(emu, (int32_t)R_RDI, (void*)R_RSI, (uint32_t)R_RDX, (void*)R_RCX); }
+void iFEiipup(x64emu_t *emu, uintptr_t fcn) { iFEiipup_t fn = (iFEiipup_t)fcn; R_RAX=(int)fn(emu, (int32_t)R_RDI, (int32_t)R_RSI, (void*)R_RDX, (uint32_t)R_RCX, (void*)R_R8); }
+void iFEpipppL(x64emu_t *emu, uintptr_t fcn) { iFEpipppL_t fn = (iFEpipppL_t)fcn; R_RAX=(int)fn(emu, (void*)R_RDI, (int32_t)R_RSI, (void*)R_RDX, (void*)R_RCX, (void*)R_R8, (uintptr_t)R_R9); }
+void iFiiULippp(x64emu_t *emu, uintptr_t fcn) { iFiiULippp_t fn = (iFiiULippp_t)fcn; R_RAX=(int)fn((int32_t)R_RDI, (int32_t)R_RSI, (uint64_t)R_RDX, (uintptr_t)R_RCX, (int32_t)R_R8, (void*)R_R9, *(void**)(R_RSP + 8), *(void**)(R_RSP + 16)); }
+void lFpLpdddddd(x64emu_t *emu, uintptr_t fcn) { lFpLpdddddd_t fn = (lFpLpdddddd_t)fcn; R_RAX=(intptr_t)fn((void*)R_RDI, (uintptr_t)R_RSI, (void*)R_RDX, emu->xmm[0].d[0], emu->xmm[1].d[0], emu->xmm[2].d[0], emu->xmm[3].d[0], emu->xmm[4].d[0], emu->xmm[5].d[0]); }
+#endif
+"""
+WRAPPER_C_FN_NEW = """\
+void pFpLLi(x64emu_t *emu, uintptr_t fcn) { pFpLLi_t fn = (pFpLLi_t)fcn; R_RAX=(uintptr_t)fn((void*)R_RDI, (uintptr_t)R_RSI, (uintptr_t)R_RDX, (int32_t)R_RCX); }
+void iFEpipppL(x64emu_t *emu, uintptr_t fcn) { iFEpipppL_t fn = (iFEpipppL_t)fcn; R_RAX=(int)fn(emu, (void*)R_RDI, (int32_t)R_RSI, (void*)R_RDX, (void*)R_RCX, (void*)R_R8, (uintptr_t)R_R9); }
+void iFiiULippp(x64emu_t *emu, uintptr_t fcn) { iFiiULippp_t fn = (iFiiULippp_t)fcn; R_RAX=(int)fn((int32_t)R_RDI, (int32_t)R_RSI, (uint64_t)R_RDX, (uintptr_t)R_RCX, (int32_t)R_R8, (void*)R_R9, *(void**)(R_RSP + 8), *(void**)(R_RSP + 16)); }
+void lFpLpdddddd(x64emu_t *emu, uintptr_t fcn) { lFpLpdddddd_t fn = (lFpLpdddddd_t)fcn; R_RAX=(intptr_t)fn((void*)R_RDI, (uintptr_t)R_RSI, (void*)R_RDX, emu->xmm[0].d[0], emu->xmm[1].d[0], emu->xmm[2].d[0], emu->xmm[3].d[0], emu->xmm[4].d[0], emu->xmm[5].d[0]); }
+#endif
+void iFEipup(x64emu_t *emu, uintptr_t fcn) { iFEipup_t fn = (iFEipup_t)fcn; R_RAX=(int)fn(emu, (int32_t)R_RDI, (void*)R_RSI, (uint32_t)R_RDX, (void*)R_RCX); }
+void iFEiipup(x64emu_t *emu, uintptr_t fcn) { iFEiipup_t fn = (iFEiipup_t)fcn; R_RAX=(int)fn(emu, (int32_t)R_RDI, (int32_t)R_RSI, (void*)R_RDX, (uint32_t)R_RCX, (void*)R_R8); }
+"""
+FUNCTIONS_LIST_OLD = """\
+#!defined(STATICBUILD) iFEipup
+#!defined(STATICBUILD) iFEiipup
+"""
+FUNCTIONS_LIST_NEW = """\
+#() iFEipup
+#() iFEiipup
+"""
+
+
+def _lift_fn_block(s: str, old_body: str, new_body: str):
+    if old_body in s:
+        return s.replace(old_body, new_body, 1), 1
+    if new_body in s:
+        return s, 0
+    return None
+
+
+def patch_generated_wrapper_h(s: str):
+    """wrapper.h：iFEipup/iFEiipup 声明移出 !STATICBUILD 守卫。"""
+    r = _lift_fn_block(s, WRAPPER_H_DECL_OLD, WRAPPER_H_DECL_NEW)
+    if r is not None:
+        return r
+    print("警告: wrapper.h 未找到 iFEipup STATICBUILD 锚点", file=sys.stderr)
+    return s, 0
+
+
+def patch_generated_wrapper_c(s: str):
+    """wrapper.c：iFEipup/iFEiipup 的 typedef 与函数体移出 !STATICBUILD 守卫。"""
+    total = 0
+    for old, new, name in (
+        (WRAPPER_C_TYPEDEF_OLD, WRAPPER_C_TYPEDEF_NEW, "typedef"),
+        (WRAPPER_C_FN_OLD, WRAPPER_C_FN_NEW, "函数体"),
+    ):
+        if old in s:
+            s = s.replace(old, new, 1)
+            total += 1
+        elif new not in s:
+            print(f"警告: wrapper.c 未找到 iFEipup {name} 锚点", file=sys.stderr)
+    return s, total
+
+
+def patch_functions_list_txt(s: str):
+    """functions_list.txt：去掉两签名的 STATICBUILD 条件前缀（与 #() 无条件一致）。"""
+    if FUNCTIONS_LIST_OLD in s:
+        return s.replace(FUNCTIONS_LIST_OLD, FUNCTIONS_LIST_NEW, 1), 1
+    if FUNCTIONS_LIST_NEW in s:
+        return s, 0
+    print("警告: functions_list.txt 未找到 iFEipup STATICBUILD 锚点", file=sys.stderr)
+    return s, 0
+
+
 root = sys.argv[1]
 include_dir = sys.argv[2] if len(sys.argv) > 2 else None
 
@@ -1119,6 +1229,17 @@ if include_dir:
 total = 0
 SKIP_PATCH = {"glibc_missing_symbols.c", "glibc_missing_symbols.h"}
 
+# functions_list.txt 不被下方 .c/.h walk 覆盖，单独提升两签名条件前缀
+_fl_path = os.path.join(root, "src", "wrapped", "generated", "functions_list.txt")
+if os.path.isfile(_fl_path):
+    with open(_fl_path, "r", encoding="utf-8", errors="replace") as _f:
+        _fl = _f.read()
+    _fl2, _m = patch_functions_list_txt(_fl)
+    if _m:
+        with open(_fl_path, "w", encoding="utf-8") as _f:
+            _f.write(_fl2)
+        total += _m
+        print(f"{_fl_path}: {_m} 处")
 
 for dirpath, _dirs, files in os.walk(os.path.join(root, "src")):
     for fn in files:
@@ -1199,6 +1320,12 @@ for dirpath, _dirs, files in os.walk(os.path.join(root, "src")):
             n += m
         if fn == "wrappedlibc_private.h" and "wrapped32" not in path:
             new, m = patch_wrappedlibc_private_h(new)
+            n += m
+        if fn == "wrapper.h" and "generated" in path and "wrapped32" not in path:
+            new, m = patch_generated_wrapper_h(new)
+            n += m
+        if fn == "wrapper.c" and "generated" in path and "wrapped32" not in path:
+            new, m = patch_generated_wrapper_c(new)
             n += m
         if n:
             with open(path, "w", encoding="utf-8") as f:
