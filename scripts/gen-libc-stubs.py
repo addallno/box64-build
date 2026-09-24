@@ -655,27 +655,30 @@ SMART_EXTRA = {
     "gammaf":    "float gammaf(float x) { return lgammaf(x); }",
     "roundeven": "double roundeven(double x) { return x; }",
     "roundevenf": "float roundevenf(float x) { return x; }",
-    # ---- FORTIFY _chk 系列：musl 无 glibc fortify，必须转发到非 chk 版本 ----
-    # stub{return 0} 会让 guest 拿到 NULL/0 并继续使用（如 strcmp(NULL,...) 直接 SIGSEGV）
-    "__memcpy_chk":   "void* __memcpy_chk(void* d, const void* s, size_t n, size_t dn) { (void)dn; return memcpy(d, s, n); }",
-    "__memmove_chk":  "void* __memmove_chk(void* d, const void* s, size_t n, size_t dn) { (void)dn; return memmove(d, s, n); }",
-    "__mempcpy_chk":  "void* __mempcpy_chk(void* d, const void* s, size_t n, size_t dn) { (void)dn; return (char*)memcpy(d, s, n) + n; }",
-    "__memset_chk":   "void* __memset_chk(void* d, int c, size_t n, size_t dn) { (void)dn; return memset(d, c, n); }",
-    "__strcpy_chk":   "char* __strcpy_chk(char* d, const char* s, size_t dn) { (void)dn; return strcpy(d, s); }",
-    "__strncpy_chk":  "char* __strncpy_chk(char* d, const char* s, size_t n, size_t dn) { (void)dn; return strncpy(d, s, n); }",
-    "__strcat_chk":   "char* __strcat_chk(char* d, const char* s, size_t dn) { (void)dn; return strcat(d, s); }",
-    "__strncat_chk":  "char* __strncat_chk(char* d, const char* s, size_t n, size_t dn) { (void)dn; return strncat(d, s, n); }",
-    "__stpcpy_chk":   "char* __stpcpy_chk(char* d, const char* s, size_t dn) { (void)dn; size_t l = strlen(s); memcpy(d, s, l + 1); return d + l; }",
-    "__stpncpy_chk":  "char* __stpncpy_chk(char* d, const char* s, size_t n, size_t dn) { (void)dn; char* r = stpncpy(d, s, n); return r; }",
-    "__wmemcpy_chk":  "wchar_t* __wmemcpy_chk(wchar_t* d, const wchar_t* s, size_t n, size_t dn) { (void)dn; return wmemcpy(d, s, n); }",
-    "__wmemmove_chk": "wchar_t* __wmemmove_chk(wchar_t* d, const wchar_t* s, size_t n, size_t dn) { (void)dn; return wmemmove(d, s, n); }",
-    "__wmemset_chk":  "wchar_t* __wmemset_chk(wchar_t* d, wchar_t c, size_t n, size_t dn) { (void)dn; return wmemset(d, c, n); }",
-    "__wcscpy_chk":   "wchar_t* __wcscpy_chk(wchar_t* d, const wchar_t* s, size_t dn) { (void)dn; return wcscpy(d, s); }",
-    "__wcsncpy_chk":  "wchar_t* __wcsncpy_chk(wchar_t* d, const wchar_t* s, size_t n, size_t dn) { (void)dn; return wcsncpy(d, s, n); }",
-    "__wcscat_chk":   "wchar_t* __wcscat_chk(wchar_t* d, const wchar_t* s, size_t dn) { (void)dn; return wcscat(d, s); }",
-    "__wcsncat_chk":  "wchar_t* __wcsncat_chk(wchar_t* d, const wchar_t* s, size_t n, size_t dn) { (void)dn; return wcsncat(d, s, n); }",
-    "__getcwd_chk":   "char* __getcwd_chk(char* b, size_t bn, size_t n) { (void)bn; return getcwd(b, n); }",
-    "__fgets_chk":    "char* __fgets_chk(char* s, size_t n, int c, FILE* f, size_t bn) { (void)bn; return fgets(s, c, f); }",
+     # ---- FORTIFY _chk 系列：musl 无 glibc fortify，必须转发到非 chk 版本 ----
+     # stub{return 0} 会让 guest 拿到 NULL/0 并继续使用（如 strcmp(NULL,...) 直接 SIGSEGV）
+     # 签名必须与 box64 static_libc.h 的 extern 声明完全一致，否则 glibc_missing_symbols.h
+     # （先 include static_libc.h 再声明 smart）会因 conflicting types 编译失败。
+     "__memcpy_chk":   "void* __memcpy_chk(void* d, void* s, size_t n, size_t dn) { (void)dn; return memcpy(d, s, n); }",
+     "__memmove_chk":  "void* __memmove_chk(void* d, void* s, size_t n, size_t dn) { (void)dn; return memmove(d, s, n); }",
+     "__mempcpy_chk":  "void* __mempcpy_chk(void* d, void* s, size_t n, size_t dn) { (void)dn; return (char*)memcpy(d, s, n) + n; }",
+     "__memset_chk":   "void* __memset_chk(void* d, int c, size_t n, size_t dn) { (void)dn; return memset(d, c, n); }",
+     "__strcpy_chk":   "void* __strcpy_chk(char* d, const char* s, size_t dn) { (void)dn; return strcpy(d, s); }",
+     "__strncpy_chk":  "void* __strncpy_chk(char* d, const char* s, size_t n, size_t dn) { (void)dn; return strncpy(d, s, n); }",
+     "__strcat_chk":   "char* __strcat_chk(char* d, const char* s, size_t dn) { (void)dn; return strcat(d, s); }",
+     "__strncat_chk":  "void* __strncat_chk(char* d, const char* s, size_t n, size_t dn) { (void)dn; return strncat(d, s, n); }",
+     "__stpcpy_chk":   "char* __stpcpy_chk(char* d, const char* s, size_t dn) { (void)dn; size_t l = strlen(s); memcpy(d, s, l + 1); return d + l; }",
+     "__stpncpy_chk":  "char* __stpncpy_chk(char* d, const char* s, size_t n, size_t dn) { (void)dn; char* r = stpncpy(d, s, n); return r; }",
+     "__wmemcpy_chk":  "wchar_t* __wmemcpy_chk(wchar_t* d, const wchar_t* s, size_t n, size_t dn) { (void)dn; return wmemcpy(d, s, n); }",
+     "__wmemmove_chk": "wchar_t* __wmemmove_chk(wchar_t* d, const wchar_t* s, size_t n, size_t dn) { (void)dn; return wmemmove(d, s, n); }",
+     "__wmemset_chk":  "wchar_t* __wmemset_chk(wchar_t* d, wchar_t c, size_t n, size_t dn) { (void)dn; return wmemset(d, c, n); }",
+     "__wcscpy_chk":   "wchar_t* __wcscpy_chk(wchar_t* d, const wchar_t* s, size_t dn) { (void)dn; return wcscpy(d, s); }",
+     "__wcsncpy_chk":  "wchar_t* __wcsncpy_chk(wchar_t* d, const wchar_t* s, size_t n, size_t dn) { (void)dn; return wcsncpy(d, s, n); }",
+     "__wcscat_chk":   "wchar_t* __wcscat_chk(wchar_t* d, const wchar_t* s, size_t dn) { (void)dn; return wcscat(d, s); }",
+     "__wcsncat_chk":  "wchar_t* __wcsncat_chk(wchar_t* d, const wchar_t* s, size_t n, size_t dn) { (void)dn; return wcsncat(d, s, n); }",
+     "__getcwd_chk":   "char* __getcwd_chk(char* b, size_t bn, size_t n) { (void)bn; return getcwd(b, n); }",
+     # static_libc.h 为 4 参（无 buflen）；guest 经 box64 GO(pFpLip) 也只传 4 参
+     "__fgets_chk":    "char* __fgets_chk(char* s, size_t n, int c, FILE* f) { (void)n; return fgets(s, c, f); }",
 }
 
 
@@ -1253,6 +1256,12 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
         # 前置跳过：musl 已知声明/内联/宏（优先级最高，避免与 smart 路径冲突）
         if name in _KNOWN_MUSL_DECLS:
             continue
+        # 第零路（前）：static_libc.h 已声明/定义 → 跳过。
+        # 本头在函数段之前 #include static_libc.h；若 smart 再声明一次，
+        # 即使语义相同、限定符/参数个数略异也会 conflicting types。
+        if name in slc_syms:
+            skipped_slc += 1
+            continue
         # 第零路：SMART_MATH 符号（isnan/isinf/finite 等）始终声明，
         # 因为 wrappedlibm.c 等文件可能不包含 <math.h>，需要这些声明。
         # 用 #undef + 正确签名（从 smart map 推导）。
@@ -1273,10 +1282,6 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
             else:
                 lines.append(f"extern void {name}(void);")
             declared += 1
-            continue
-        # 第一路：static_libc.h 已声明/定义 → 跳过（避免与其冲突）
-        if name in slc_syms:
-            skipped_slc += 1
             continue
         # 第二路：musl 头文件已有函数/类型声明 → 跳过
         # 注意：不因 musl_all（nm 符号）跳过——内部符号可能在 libc.a 中有
