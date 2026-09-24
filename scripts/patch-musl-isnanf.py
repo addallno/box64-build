@@ -1068,6 +1068,40 @@ def patch_wrappedlib_init_h(s: str):
     return s, 0
 
 
+# ---- wrappedlibc_private.h 专项：STATICBUILD 下 __xmknod/__xmknodat 死映射 ----
+# 上游 STATICBUILD 分支只有被注释的 //GO，GOM 仅在 #else；static 构建下
+# mysymbolmap 完全没有 __xmknod → crashhandler.so 等 JUMP_SLOT 解析失败。
+# 两分支统一 GOM（与 __xstat 一致，走 my___xmknod 转发 musl mknod，自包含）。
+XMKNOB_BLOCK_OLD = """\
+#ifdef STATICBUILD
+//GO(__xmknod, iFipup)
+//GO(__xmknodat, iFiipup)
+#else
+GOM(__xmknod, iFEipup)
+GOM(__xmknodat, iFEiipup)
+#endif
+"""
+XMKNOB_BLOCK_NEW = """\
+#ifdef STATICBUILD
+GOM(__xmknod, iFEipup)
+GOM(__xmknodat, iFEiipup)
+#else
+GOM(__xmknod, iFEipup)
+GOM(__xmknodat, iFEiipup)
+#endif
+"""
+
+
+def patch_wrappedlibc_private_h(s: str):
+    """wrappedlibc_private.h：STATICBUILD 下恢复 __xmknod/__xmknodat 的 GOM 映射。"""
+    if XMKNOB_BLOCK_OLD in s:
+        return s.replace(XMKNOB_BLOCK_OLD, XMKNOB_BLOCK_NEW, 1), 1
+    if XMKNOB_BLOCK_NEW in s:
+        return s, 0  # 幂等
+    print("警告: wrappedlibc_private.h 未找到 __xmknod STATICBUILD 锚点", file=sys.stderr)
+    return s, 0
+
+
 root = sys.argv[1]
 include_dir = sys.argv[2] if len(sys.argv) > 2 else None
 
@@ -1162,6 +1196,9 @@ for dirpath, _dirs, files in os.walk(os.path.join(root, "src")):
             n += m
         if fn == "wrappedlib_init.h":
             new, m = patch_wrappedlib_init_h(new)
+            n += m
+        if fn == "wrappedlibc_private.h" and "wrapped32" not in path:
+            new, m = patch_wrappedlibc_private_h(new)
             n += m
         if n:
             with open(path, "w", encoding="utf-8") as f:
