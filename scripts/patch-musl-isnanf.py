@@ -972,6 +972,27 @@ extern char* box_realpath(const char* path, char* ret);
     return s, 1
 
 
+def _inject_staticbuild_def(s: str) -> tuple:
+    """老版本（如 v0.2.4）CMakeLists.txt：STATICBUILD 仅设链接旗标，
+    不 add_definitions(-DSTATICBUILD) → 源码内所有 #ifdef STATICBUILD
+    分支（含本补丁注入的裁剪/适配代码）与 debug.h 分支全部失效。
+    在 option(STATICBUILD) 行后注入 add_definitions（add_executable 之前）。
+    main 版已有 add_definitions(-DSTATICBUILD) → 判据不触发。"""
+    if "add_definitions(-DSTATICBUILD)" in s:
+        return s, 0
+    anchor = ('option(STATICBUILD "Set to ON to have a static build '
+              '(Warning, not working)" ${STATICBUILD})')
+    if anchor not in s:
+        print("警告: CMakeLists.txt 未找到 option(STATICBUILD) 锚点", file=sys.stderr)
+        return s, 0
+    s = s.replace(anchor, anchor + "\n"
+                  "if(STATICBUILD)\n"
+                  "    add_definitions(-DSTATICBUILD)\n"
+                  "endif()", 1)
+    print("CMakeLists.txt: 已注入 add_definitions(-DSTATICBUILD)")
+    return s, 1
+
+
 def _inject_mallochook_cmake(s: str):
     """CMakeLists.txt：STATICBUILD AND BOX32 下追加 mallochook.c 编译源。
     非 static 时上游 if(NOT STATICBUILD) 已包含 mallochook.c，此处条件不触发，
@@ -1066,6 +1087,9 @@ def inject_missing_symbols(root: str):
     if m:
         changed = True
         print("CMakeLists.txt: 已追加 STATICBUILD AND BOX32 下 mallochook.c 编译块")
+    s, m = _inject_staticbuild_def(s)
+    if m:
+        changed = True
     if changed:
         with open(cmake, "w", encoding="utf-8") as f:
             f.write(s)
