@@ -1039,13 +1039,40 @@ def _is_safe_shared_sig(ret: str, params: str) -> bool:
     return True
 
 
+def find_local_export_data(box64_src):
+    """扫描 box64 源中 EXPORT 定义的数据符号（如 wrappedlibpcre.c 的 pcre_free）。
+    这些符号 box64 自身有 strong 定义；glibc_missing_symbols.h 若再声明
+    extern unsigned char[N]，会在同一 TU（经 wrappedlib_init.h include）
+    与定义类型冲突 → 生成头文件时跳过。返回 {符号名}。"""
+    found = set()
+    pat = re.compile(r"^EXPORT\s+(?!.*\()(.+?)\s*([A-Za-z_]\w*)\s*(?:=|;)")
+    src = os.path.join(box64_src, "src")
+    if not os.path.isdir(src):
+        return found
+    for dirpath, _dirs, files in os.walk(src):
+        for fn in files:
+            if not fn.endswith(".c"):
+                continue
+            try:
+                with open(os.path.join(dirpath, fn), encoding="utf-8",
+                          errors="replace") as f:
+                    for line in f:
+                        m = pat.match(line)
+                        if m:
+                            found.add(m.group(2))
+            except OSError:
+                pass
+    return found
+
+
 def generate_header(func_refs, data_refs, sigs, smart, out_path,
                     musl_header_decls=None,
                     musl_macros=None,
                     static_libc_syms=None,
                     musl_syms=None,
                     box32_sigs=None,
-                    has_static_libc=True):
+                    has_static_libc=True,
+                    local_data_defs=None):
     """生成 extern 声明头文件。
 
     五路过滤策略（最小化与 musl/box64 头文件的类型冲突）:
@@ -1365,6 +1392,10 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
             # 声明 unsigned char[N] 会 conflicting → 一律跳过
             # （跨 TU 的 in6addr/stack_end/r_debug 走 _EXPLICIT）
             continue
+        elif local_data_defs and name in local_data_defs:
+            # box64 自身 EXPORT 定义的数据（如 wrappedlibpcre.c 的 pcre_free）：
+            # 同 TU 内 extern unsigned char[N] 与定义类型冲突 → 跳过声明
+            continue
         else:
             lines.append(f"extern unsigned char {name}[{data_refs[name][0]}];")
 
@@ -1518,13 +1549,17 @@ def main():
     h_path = args.output_h or os.path.join(
         os.path.dirname(args.output), "glibc_missing_symbols.h")
 
+    local_data = find_local_export_data(args.box64_src)
+    print(f"[box64] EXPORT 数据定义 {len(local_data)} 个（声明跳过交集）")
+
     h_lines = generate_header(func_refs, data_refs, sigs, smart, h_path,
                               musl_header_decls=musl_header_decls,
                               musl_macros=musl_macros,
                               static_libc_syms=static_libc_syms,
                               musl_syms=musl_syms,
                               box32_sigs=box32_sigs,
-                              has_static_libc=slh is not None)
+                              has_static_libc=slh is not None,
+                              local_data_defs=local_data)
 
     # 注入 GO2 目标 my_* 声明到 wrappedlib_init32.h（须在 patch 注入 glibc_missing 之后）
     inject_my64_decls_into_init32(args.box64_src)
