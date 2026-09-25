@@ -36,10 +36,16 @@ else
   echo "警告: 未找到 libc.a，不设置 MUSL_SYMS_FILE（将由 gen-libc-stubs.py 下载 musl 源码）"
 fi
 
-echo "==> 下载 box64 源码"
+echo "==> 下载 box64 源码 (ref=${BOX64_REF:-main})"
 cd $WORK
 rm -rf box64
-git clone --depth 1 https://github.com/ptitSeb/box64.git
+mkdir box64
+cd box64
+git init -q .
+git remote add origin https://github.com/ptitSeb/box64.git
+git fetch --depth 1 origin "${BOX64_REF:-main}"
+git checkout -q FETCH_HEAD
+cd $WORK
 
 echo "==> 提取 wrappedlibc_private.h 引用符号（供 header 提取时精确定位需 undef 的宏）"
 python3 -c "
@@ -337,7 +343,7 @@ cmake .. \
   -DCMAKE_C_FLAGS="-D_GNU_SOURCE -D_DEFAULT_SOURCE -I$WORK/include -include $WORK/include/mmap64.h -Wno-implicit-function-declaration -fno-builtin $MUTEX_MACROS" \
   -DARM_DYNAREC=ON \
   -DBOX32=ON \
-  -DSTATICBUILD=ON \
+  -DSTATICBUILD=${STATICBUILD:-true} \
   -DBAD_SIGNAL=ON \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo
 make -j$(nproc)

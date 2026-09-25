@@ -2,6 +2,15 @@ name: build-box64
 
 on:
   workflow_dispatch:
+    inputs:
+      box64_ref:
+        description: 'box64 上游 ref（分支/tag/commit，如 main、v0.2.4）'
+        required: true
+        default: 'main'
+      static:
+        description: 'STATICBUILD 静态链接（false = 动态）'
+        type: boolean
+        default: true
 
 jobs:
   build:
@@ -9,12 +18,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: 交叉编译 box64 (aarch64 musl 静态, BOX32)
+      - name: 交叉编译 box64 (aarch64 musl, BOX32 + DYNAREC)
+        env:
+          BOX64_REF: ${{ inputs.box64_ref }}
+          STATICBUILD: ${{ inputs.static }}
         run: bash scripts/build-box64-musl.sh
 
-      - name: 上传静态产物
+      - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
-          name: box64-aarch64-musl
+          name: box64-aarch64-musl-${{ replace(inputs.box64_ref, '/', '-') }}-${{ inputs.static && 'static' || 'dyn' }}
           path: /tmp/box64-aarch64-musl
           if-no-files-found: error
