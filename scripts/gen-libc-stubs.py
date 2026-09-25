@@ -1044,7 +1044,8 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
                     musl_macros=None,
                     static_libc_syms=None,
                     musl_syms=None,
-                    box32_sigs=None):
+                    box32_sigs=None,
+                    has_static_libc=True):
     """生成 extern 声明头文件。
 
     五路过滤策略（最小化与 musl/box64 头文件的类型冲突）:
@@ -1059,6 +1060,10 @@ def generate_header(func_refs, data_refs, sigs, smart, out_path,
     已知会冲突的符号。
     """
     lines = [_HEADER_DECL]
+    if not has_static_libc:
+        # 老版本源码无 src/libtools/static_libc.h，剔除模板中的 include 行
+        lines = [("\n".join(l for l in _HEADER_DECL.splitlines()
+                            if 'libtools/static_libc.h' not in l) + "\n")]
     undefs = _render_undefs(smart)
     if undefs:
         lines.append("/* 屏蔽 musl <math.h> 宏定义 */")
@@ -1411,9 +1416,12 @@ def main():
                                         "wrappedlibc_private.h")
     slh = args.static_libc_h or os.path.join(args.box64_src, "src", "libtools",
                                              "static_libc.h")
-    for p in (priv, slh):
-        if not os.path.isfile(p):
-            sys.exit(f"找不到文件: {p}")
+    if not os.path.isfile(priv):
+        sys.exit(f"找不到文件: {priv}")
+    if not os.path.isfile(slh):
+        # 老版本（如 v0.2.4）尚无 src/libtools/static_libc.h，降级运行
+        print(f"[warn] static_libc.h 不存在，按空集处理: {slh}")
+        slh = None
 
     # 1. musl 符号集
     if args.musl_syms:
@@ -1453,8 +1461,8 @@ def main():
                 print(f"[box64] {fn}: +{len(new_funcs)} 函数, +{len(new_data)} 数据")
             func_refs.update(extra_func)
             data_refs.update(extra_data)
-    sigs = parse_static_libc_signatures(slh)
-    static_libc_syms = parse_static_libc_symbols(slh)
+    sigs = parse_static_libc_signatures(slh) if slh else {}
+    static_libc_syms = parse_static_libc_symbols(slh) if slh else set()
     # my32_ 本地定义签名（header 声明须兼容，避免 conflicting types）
     # 扫 wrapped32 + libtools（my32_imaxdiv/div 等可能在 libtools/*32*.c）
     libtools_dir = os.path.join(args.box64_src, "src", "libtools")
@@ -1515,7 +1523,8 @@ def main():
                               musl_macros=musl_macros,
                               static_libc_syms=static_libc_syms,
                               musl_syms=musl_syms,
-                              box32_sigs=box32_sigs)
+                              box32_sigs=box32_sigs,
+                              has_static_libc=slh is not None)
 
     # 注入 GO2 目标 my_* 声明到 wrappedlib_init32.h（须在 patch 注入 glibc_missing 之后）
     inject_my64_decls_into_init32(args.box64_src)
