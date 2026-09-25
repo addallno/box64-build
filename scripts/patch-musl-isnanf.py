@@ -864,6 +864,16 @@ def patch_mallochook_c(s: str):
     return s, n
 
 
+def patch_x64run_c(s: str):
+    """x64run.c：老版本（如 v0.2.4）使用 glibc 内部类型 __uint16_t，musl 无此
+    typedef → 改用等价的 uint16_t。main 版已无此写法，替换 0 处无害。"""
+    if "__uint16_t" not in s:
+        return s, 0
+    s = s.replace("__uint16_t", "uint16_t")
+    print(f"x64run.c: __uint16_t → uint16_t")
+    return s, 1
+
+
 def _inject_mallochook_cmake(s: str):
     """CMakeLists.txt：STATICBUILD AND BOX32 下追加 mallochook.c 编译源。
     非 static 时上游 if(NOT STATICBUILD) 已包含 mallochook.c，此处条件不触发，
@@ -1513,6 +1523,9 @@ for dirpath, _dirs, files in os.walk(os.path.join(root, "src")):
                 n += m
         if fn == "mallochook.c":
             new, m = patch_mallochook_c(new)
+            n += m
+        if fn == "x64run.c":
+            new, m = patch_x64run_c(new)
             n += m
         if fn == "wrappedlibresolv.c":
             new, m = patch_wrappedlibresolv_c(new)
