@@ -938,6 +938,87 @@ def patch_elfloader_c(s: str):
     return s, m
 
 
+_GLOBALREF_FILES = {
+    "wrappedgdk3.c", "wrappedgdkx112.c", "wrappedgtk3.c", "wrappedgtkx112.c",
+    "wrappedgthread2.c", "wrappedlibncurses.c", "wrappedlibncurses6.c",
+    "wrappedlibncursesw.c", "wrappedlibncursesw6.c",
+}
+
+
+def patch_wrapped_globalrefs(s: str):
+    """STATICBUILD 下 globalsymbols.c 不编译（见 CMake REMOVE_ITEM），其
+    my_checkGlobalGdkDisplay/my_checkGlobalTInfo/my_setGlobalGThreadsInit
+    定义消失 → 各 wrapped 文件中的单行刷新调用包 #ifndef STATICBUILD。
+    main 版静态不编这些 wrapped 文件，无需此补丁。"""
+    if "box64-build: globalsymbols refs disabled" in s:
+        return s, 0
+    m = 0
+    for sym in ("my_checkGlobalGdkDisplay", "my_checkGlobalTInfo",
+                "my_setGlobalGThreadsInit"):
+        s2, k = re.subn(rf"^([ \t]*){sym}\(\);$",
+                        rf"\1#ifndef STATICBUILD\n\1{sym}();\n\1#endif",
+                        s, flags=re.M)
+        if k:
+            s = s2
+            m += k
+    if m:
+        s = "/* box64-build: globalsymbols refs disabled */\n" + s
+    print(f"wrapped({sym}): {m} 处 my_* 刷新调用包 #ifndef STATICBUILD"
+          if m else "")
+    return s, m
+
+
+def patch_wrappedlibc_opt_stubs(s: str):
+    """wrappedlibc.c：globalsymbols.c 的 my_updateGlobalOpt/my_checkGlobalOpt
+    定义消失 → 照 main 注入 STATICBUILD 空实现（opt 全局符号同步在静态
+    构建下不做，optarg 等直接用 musl getopt.o 的）。main 已有同款 → 跳过。"""
+    if "void my_updateGlobalOpt() {}" in s:
+        return s, 0
+    anchor = "EXPORT int my_getopt(int argc, char* const argv[], const char *optstring)"
+    if anchor not in s:
+        print("警告: wrappedlibc.c 未找到 my_getopt 锚点", file=sys.stderr)
+        return s, 0
+    s = s.replace(anchor,
+                  "#ifdef STATICBUILD\n"
+                  "void my_updateGlobalOpt() {}\n"
+                  "void my_checkGlobalOpt() {}\n"
+                  "#endif\n\n" + anchor, 1)
+    print("wrappedlibc.c: 注入 my_updateGlobalOpt/my_checkGlobalOpt 空实现")
+    return s, 1
+
+
+def patch_librarian_globalrefs(s: str):
+    """librarian.c：my_GetGTKDisplay 定义在 globalsymbols.c（STATICBUILD
+    下不编）→ 声明与 gdk_display/g_threads_got_initialized 两个特殊符号
+    查找段包 #ifndef STATICBUILD（对齐 main librarian.c L623+、L645+）。"""
+    if "#ifndef STATICBUILD\nvoid** my_GetGTKDisplay();" in s:
+        return s, 0
+    m = 0
+    decls = ("void** my_GetGTKDisplay();\n"
+             "void** my_GetGthreadsGotInitialized();\n")
+    if decls in s:
+        s = s.replace(decls, "#ifndef STATICBUILD\n" + decls + "#endif\n", 1)
+        m += 1
+        print("librarian.c: my_GetGTKDisplay 等声明包 #ifndef STATICBUILD")
+    else:
+        print("警告: librarian.c 未找到 my_GetGTKDisplay 声明对", file=sys.stderr)
+    pat = re.compile(
+        r"(    // some special case symbol, defined inside box64 itself\n"
+        r"    if\(!strcmp\(name, \"gdk_display\"\)\) \{.*?"
+        r"return 1;\n    \}\n)"
+        r"(    if\(!strcmp\(name, \"g_threads_got_initialized\"\)\) \{.*?"
+        r"return 1;\n    \}\n)", re.S)
+    s2, k = pat.subn(r"#ifndef STATICBUILD\n\1\2#endif\n", s)
+    if k:
+        s = s2
+        m += k
+        print(f"librarian.c: {k} 处 gdk_display/g_threads 特殊段包"
+              " #ifndef STATICBUILD")
+    else:
+        print("警告: librarian.c 未找到 gdk_display 特殊段", file=sys.stderr)
+    return s, m
+
+
 def patch_debug_h(s: str):
     """老版本（如 v0.2.4）debug.h 无 STATICBUILD 分支：
     - STATICBUILD 下仍声明 __libc_* 与 glibc_missing_symbols.h 的
@@ -1707,6 +1788,14 @@ for dirpath, _dirs, files in os.walk(os.path.join(root, "src")):
                 new, m = patch_wrapped32_libc_c(new)
             else:
                 new, m = patch_wrappedlibc_c(new)
+                n += m
+                new, m = patch_wrappedlibc_opt_stubs(new)
+            n += m
+        if fn == "librarian.c":
+            new, m = patch_librarian_globalrefs(new)
+            n += m
+        if fn in _GLOBALREF_FILES:
+            new, m = patch_wrapped_globalrefs(new)
             n += m
         if fn == "static_libc.h":
             new, m = patch_static_libc_h(new)
