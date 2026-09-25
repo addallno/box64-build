@@ -955,8 +955,11 @@ def patch_wrapped_globalrefs(s: str):
     m = 0
     for sym in ("my_checkGlobalGdkDisplay", "my_checkGlobalTInfo",
                 "my_setGlobalGThreadsInit"):
+        # else 补 ((void)0);：调用可能位于无花括号 if 单行体，纯 #ifndef
+        # 包裹会在 STATICBUILD 下留下空 if 体 → 语法错误
         s2, k = re.subn(rf"^([ \t]*){sym}\(\);$",
-                        rf"\1#ifndef STATICBUILD\n\1{sym}();\n\1#endif",
+                        rf"\1#ifndef STATICBUILD\n\1{sym}();\n"
+                        rf"\1#else\n\1((void)0);\n\1#endif",
                         s, flags=re.M)
         if k:
             s = s2
