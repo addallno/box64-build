@@ -1035,24 +1035,38 @@ def patch_mmap64_calls(s: str):
 
 
 def _inject_staticbuild_def(s: str) -> tuple:
-    """老版本（如 v0.2.4）CMakeLists.txt：STATICBUILD 仅设链接旗标，
-    不 add_definitions(-DSTATICBUILD) → 源码内所有 #ifdef STATICBUILD
-    分支（含本补丁注入的裁剪/适配代码）与 debug.h 分支全部失效。
-    在 option(STATICBUILD) 行后注入 add_definitions（add_executable 之前）。
-    main 版已有 add_definitions(-DSTATICBUILD) → 判据不触发。"""
-    if "add_definitions(-DSTATICBUILD)" in s:
-        return s, 0
-    anchor = ('option(STATICBUILD "Set to ON to have a static build '
-              '(Warning, not working)" ${STATICBUILD})')
-    if anchor not in s:
-        print("警告: CMakeLists.txt 未找到 option(STATICBUILD) 锚点", file=sys.stderr)
-        return s, 0
-    s = s.replace(anchor, anchor + "\n"
-                  "if(STATICBUILD)\n"
-                  "    add_definitions(-DSTATICBUILD)\n"
-                  "endif()", 1)
-    print("CMakeLists.txt: 已注入 add_definitions(-DSTATICBUILD)")
-    return s, 1
+    """老版本（如 v0.2.4）CMakeLists.txt 的 STATICBUILD 修正：
+    1. STATICBUILD 仅设链接旗标，不 add_definitions(-DSTATICBUILD)
+       → 源码内所有 #ifdef STATICBUILD 分支全部失效 → 在 option 行后
+       注入 add_definitions（须在 add_executable 之前）。
+    2. STATICBUILD LINK_FLAGS 含 -Wl,--whole-archive：musl libc.a 全员按
+       归档顺序铺开，sigsetjmp→setjmp / __cp_begin→__cp_cancel 等条件
+       分支（R_AARCH64_CONDBR19，±1MB）跨距超限 → 链接失败；main 版走
+       普通选择性静态链接（target_link_libraries c m ...）→ 去除
+       --whole-archive 与 --allow-multiple-definition 对齐。
+    两判据均针对老版本串，main 版已有 add_definitions 且无 whole-archive
+    连写（仅注释行）→ 不受影响。"""
+    m = 0
+    if "add_definitions(-DSTATICBUILD)" not in s:
+        anchor = ('option(STATICBUILD "Set to ON to have a static build '
+                  '(Warning, not working)" ${STATICBUILD})')
+        if anchor not in s:
+            print("警告: CMakeLists.txt 未找到 option(STATICBUILD) 锚点",
+                  file=sys.stderr)
+        else:
+            s = s.replace(anchor, anchor + "\n"
+                          "if(STATICBUILD)\n"
+                          "    add_definitions(-DSTATICBUILD)\n"
+                          "endif()", 1)
+            print("CMakeLists.txt: 已注入 add_definitions(-DSTATICBUILD)")
+            m += 1
+    old_flags = "-Wl,--whole-archive -Wl,--allow-multiple-definition "
+    if old_flags in s:
+        s = s.replace(old_flags, "")
+        print("CMakeLists.txt: STATICBUILD LINK_FLAGS 去除 --whole-archive"
+              " / --allow-multiple-definition（对齐 main 选择性静态链接）")
+        m += 1
+    return s, m
 
 
 def _inject_mallochook_cmake(s: str):
