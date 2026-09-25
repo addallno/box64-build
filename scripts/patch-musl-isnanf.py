@@ -515,8 +515,9 @@ def patch_wrappedlibc_c(s: str):
                 s = s.replace(old, new)
                 count += 1
             else:
-                assert s.count(old) == 1, f"wrappedlibc.c 替换片段不唯一: {old!r}"
-                s = s.replace(old, new, 1)
+                # 调用行带 `int r =` 语句前缀，不会匹配 alias 声明；
+                # 老版本（如 v0.2.4）同一替换可出现在多个函数体 → 全部替换
+                s = s.replace(old, new)
                 count += 1
 
     # musl 无 *64 变体（off_t 恒 64 位），纯去掉 64 后缀即可。
@@ -846,13 +847,19 @@ def patch_mallochook_c(s: str):
     open_b = "// redefining all libc memory allocation routines"
     close_b = "#undef SUPER\n#else//ANDROID"
     assert open_b in s, "mallochook.c 找不到 interpose 锚点"
-    assert close_b in s, "mallochook.c 找不到 #undef SUPER 锚点"
     s = s.replace(open_b,
                   "#ifndef STATICBUILD\n"
                   "// box64-build: static 裁剪 interpose 区（与 musl 重复符号）\n"
                   + open_b, 1)
-    s = s.replace(close_b,
-                  "#undef SUPER\n#endif // box64-build\n#else//ANDROID", 1)
+    if close_b in s:
+        s = s.replace(close_b,
+                      "#undef SUPER\n#endif // box64-build\n#else//ANDROID", 1)
+    elif s.count("#undef SUPER") == 1:
+        # 老版本（如 v0.2.4）无 ANDROID 分支，#undef SUPER 位于文件尾
+        s = s.replace("#undef SUPER",
+                      "#undef SUPER\n#endif // box64-build", 1)
+    else:
+        assert False, "mallochook.c 找不到 #undef SUPER 锚点"
     n += 1
     return s, n
 
@@ -867,7 +874,12 @@ def _inject_mallochook_cmake(s: str):
               "        )\n"
               "endif()\n"
               "if(BOX32)")
-    assert anchor in s, "CMakeLists.txt 找不到 mallochook 注入锚点"
+    if anchor not in s:
+        # 老版本（如 v0.2.4）：mallochook.c 已无条件列在 ELFLOADER_SRC，无需注入
+        if '"${BOX64_ROOT}/src/mallochook.c"' in s:
+            print("CMakeLists.txt: mallochook.c 已在编译源列表，跳过注入")
+            return s, 0
+        assert anchor in s, "CMakeLists.txt 找不到 mallochook 注入锚点"
     block = ('"${BOX64_ROOT}/src/librarian/globalsymbols.c"\n'
              "        )\n"
              "endif()\n"
