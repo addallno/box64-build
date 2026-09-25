@@ -903,15 +903,39 @@ def patch_x64run_c(s: str):
 
 
 def patch_elfloader_c(s: str):
-    """elfloader.c：musl 无 dlvsym（glibc 专属）。GetNativeSymbolUnversioned
-    本意即不检查版本取符号（注释自述 like dlsym, but no version check）
-    → 降级为 dlsym。main 版已删除该函数，替换 0 处无害。"""
+    """elfloader.c：
+    1. musl 无 dlvsym（glibc 专属）。GetNativeSymbolUnversioned 本意即不检查
+       版本取符号 → 降级为 dlsym。main 版已删除该函数，替换 0 处无害。
+    2. STATICBUILD 下 mallochook 的 startMallocHook 定义被裁 → 对齐 main
+       L52-56 注入空函数（保留调用点）；checkHookedSymbols 调用包
+       #ifndef STATICBUILD（对齐 main L1122-1124）。"""
+    m = 0
     old = "s->addr = dlvsym(s->lib, s->name, vername)"
-    if old not in s:
-        return s, 0
-    s = s.replace(old, "s->addr = dlsym(s->lib, s->name)")
-    print("elfloader.c: dlvsym → dlsym（musl 无符号版本化查找）")
-    return s, 1
+    if old in s:
+        s = s.replace(old, "s->addr = dlsym(s->lib, s->name)")
+        print("elfloader.c: dlvsym → dlsym（musl 无符号版本化查找）")
+        m += 1
+    # startMallocHook：STATICBUILD 下 mallochook 定义被裁 → 空函数兜底
+    if "void startMallocHook() {}" not in s:
+        decl = re.search(r"^void startMallocHook\(\);", s, re.M)
+        if decl:
+            s = s[:decl.start()] + (
+                "#ifndef STATICBUILD\n"
+                "void startMallocHook();\n"
+                "#else\n"
+                "void startMallocHook() {}\n"
+                "#endif") + s[decl.end():]
+            print("elfloader.c: startMallocHook 注入 STATICBUILD 空函数")
+            m += 1
+    # checkHookedSymbols 调用排除（STATICBUILD 下定义已裁）
+    old_ckh = "    checkHookedSymbols(h);"
+    if old_ckh in s and "#ifndef STATICBUILD\n    checkHookedSymbols(h);" not in s:
+        s = s.replace(
+            old_ckh,
+            "    #ifndef STATICBUILD\n    checkHookedSymbols(h);\n    #endif", 1)
+        print("elfloader.c: checkHookedSymbols 调用包 #ifndef STATICBUILD")
+        m += 1
+    return s, m
 
 
 def patch_debug_h(s: str):
@@ -969,7 +993,45 @@ extern char* box_realpath(const char* path, char* ret);
 #endif"""
     s = s.replace(old, new, 1)
     print("debug.h: 已注入 STATICBUILD 分支（box_* → libc 直用）")
-    return s, 1
+    m = 1
+    # STATICBUILD 下 init_malloc_hook 定义已裁 → 声明一并排除（对齐 main L111）
+    hook = "void init_malloc_hook(void);"
+    if hook in s and "#ifndef STATICBUILD\nvoid init_malloc_hook(void);" not in s:
+        s = s.replace(hook, "#ifndef STATICBUILD\n" + hook + "\n#endif", 1)
+        print("debug.h: init_malloc_hook 声明包 #ifndef STATICBUILD")
+        m += 1
+    return s, m
+
+
+def patch_main_c(s: str):
+    """老版本 main.c：endBox64/main 中调用 STATICBUILD 下已被裁剪的
+    endMallocHook/init_malloc_hook → 调用包 #ifndef STATICBUILD
+    （main 版已删除这些调用，判据不中 → 0 处无害）。"""
+    m = 0
+    old1 = "    endMallocHook();"
+    if old1 in s and "#ifndef STATICBUILD\n    endMallocHook();" not in s:
+        s = s.replace(old1,
+                      "    #ifndef STATICBUILD\n    endMallocHook();\n    #endif", 1)
+        print("main.c: endMallocHook 调用包 #ifndef STATICBUILD")
+        m += 1
+    old2 = "    init_malloc_hook();"
+    if old2 in s and "#ifndef STATICBUILD\n    init_malloc_hook();" not in s:
+        s = s.replace(old2,
+                      "    #ifndef STATICBUILD\n    init_malloc_hook();\n    #endif", 1)
+        print("main.c: init_malloc_hook 调用包 #ifndef STATICBUILD")
+        m += 1
+    return s, m
+
+
+def patch_mmap64_calls(s: str):
+    """musl 无 mmap64（off_t 恒 64 位，mmap 即等价）。
+    main 版由 src/custommmap.c 提供 EXPORT void* mmap64 实现；老版本无该
+    文件 → 把对 libc mmap64 的裸调用改写为 mmap。my_mmap64（_ 前缀排除）
+    与字符串常量（后非 '(' ）不受影响。"""
+    new, m = re.subn(r"(?<!\w)mmap64\(", "mmap(", s)
+    if m:
+        print(f"mmap64( → mmap( 调用改写 {m} 处")
+    return new, m
 
 
 def _inject_staticbuild_def(s: str) -> tuple:
@@ -1563,6 +1625,9 @@ if include_dir:
 total = 0
 SKIP_PATCH = {"glibc_missing_symbols.c", "glibc_missing_symbols.h"}
 
+# main 版有 src/custommmap.c 提供 mmap64 实现；老版本无 → 裸调用改写为 mmap
+_has_custommmap = os.path.isfile(os.path.join(root, "src", "custommmap.c"))
+
 # functions_list.txt 不被下方 .c/.h walk 覆盖，单独提升两签名条件前缀
 _fl_path = os.path.join(root, "src", "wrapped", "generated", "functions_list.txt")
 if os.path.isfile(_fl_path):
@@ -1651,6 +1716,12 @@ for dirpath, _dirs, files in os.walk(os.path.join(root, "src")):
             n += m
         if fn == "elfloader.c":
             new, m = patch_elfloader_c(new)
+            n += m
+        if fn == "main.c" and path.endswith(os.path.join("src", "main.c")):
+            new, m = patch_main_c(new)
+            n += m
+        if not _has_custommmap and fn in ("wrappedlibc.c", "custommem.c"):
+            new, m = patch_mmap64_calls(new)
             n += m
         if fn == "debug.h":
             new, m = patch_debug_h(new)
