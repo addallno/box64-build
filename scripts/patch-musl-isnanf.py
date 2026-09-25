@@ -874,6 +874,18 @@ def patch_x64run_c(s: str):
     return s, 1
 
 
+def patch_elfloader_c(s: str):
+    """elfloader.c：musl 无 dlvsym（glibc 专属）。GetNativeSymbolUnversioned
+    本意即不检查版本取符号（注释自述 like dlsym, but no version check）
+    → 降级为 dlsym。main 版已删除该函数，替换 0 处无害。"""
+    old = "s->addr = dlvsym(s->lib, s->name, vername)"
+    if old not in s:
+        return s, 0
+    s = s.replace(old, "s->addr = dlsym(s->lib, s->name)")
+    print("elfloader.c: dlvsym → dlsym（musl 无符号版本化查找）")
+    return s, 1
+
+
 def _inject_mallochook_cmake(s: str):
     """CMakeLists.txt：STATICBUILD AND BOX32 下追加 mallochook.c 编译源。
     非 static 时上游 if(NOT STATICBUILD) 已包含 mallochook.c，此处条件不触发，
@@ -1526,6 +1538,9 @@ for dirpath, _dirs, files in os.walk(os.path.join(root, "src")):
             n += m
         if fn == "x64run.c":
             new, m = patch_x64run_c(new)
+            n += m
+        if fn == "elfloader.c":
+            new, m = patch_elfloader_c(new)
             n += m
         if fn == "wrappedlibresolv.c":
             new, m = patch_wrappedlibresolv_c(new)
