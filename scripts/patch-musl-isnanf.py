@@ -1066,6 +1066,24 @@ def _inject_staticbuild_def(s: str) -> tuple:
         print("CMakeLists.txt: STATICBUILD LINK_FLAGS 去除 --whole-archive"
               " / --allow-multiple-definition（对齐 main 选择性静态链接）")
         m += 1
+    # 3. main 版在 if(NOT STATICBUILD) 内编 globalsymbols.c，老版本在无条件
+    #    ELFLOADER_SRC 列表 → 该文件 EXPORT 定义 optarg/optind/opterr/optopt，
+    #    去除 --allow-multiple-definition 后与 musl getopt.o 强定义冲突 →
+    #    STATICBUILD 下从列表移除（main 静态同样不编此文件）
+    if ("list(REMOVE_ITEM ELFLOADER_SRC" not in s
+            and 'add_executable(${BOX64} ${ELFLOADER_SRC} ${WRAPPEDS}' in s):
+        anchor = ('add_executable(${BOX64} ${ELFLOADER_SRC} ${WRAPPEDS} '
+                  '"${BOX64_ROOT}/src/git_head.h")')
+        if anchor in s:
+            s = s.replace(anchor,
+                          "if(STATICBUILD)\n"
+                          "    list(REMOVE_ITEM ELFLOADER_SRC\n"
+                          "        \"${BOX64_ROOT}/src/librarian/"
+                          "globalsymbols.c\")\n"
+                          "endif()\n" + anchor, 1)
+            print("CMakeLists.txt: STATICBUILD 下移除 globalsymbols.c"
+                  "（对齐 main，避免 optarg 等与 musl getopt.o 重复定义）")
+            m += 1
     return s, m
 
 
