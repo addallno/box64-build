@@ -914,6 +914,64 @@ def patch_elfloader_c(s: str):
     return s, 1
 
 
+def patch_debug_h(s: str):
+    """老版本（如 v0.2.4）debug.h 无 STATICBUILD 分支：
+    - STATICBUILD 下仍声明 __libc_* 与 glibc_missing_symbols.h 的
+      extern void(void) 声明冲突 → 跳过声明、box_* 直接用 libc（musl）
+    - box_strdup/box_realpath 需宏化为 strdup/realpath（mallochook.c 中
+      的函数定义已在 STATICBUILD 下被裁掉，须有替代实现）
+    main 版已有 defined(STATICBUILD) 分支 → 判据不触发。"""
+    if "defined(STATICBUILD)" in s:
+        return s, 0
+    old = """extern void* __libc_malloc(size_t);
+extern void* __libc_realloc(void*, size_t);
+extern void* __libc_calloc(size_t, size_t);
+extern void  __libc_free(void*);
+extern void* __libc_memalign(size_t, size_t);
+#endif
+#define box_malloc      __libc_malloc
+#define box_realloc     __libc_realloc
+#define box_calloc      __libc_calloc
+#define box_free        __libc_free
+#define box_memalign    __libc_memalign 
+extern char* box_strdup(const char* s);
+extern char* box_realpath(const char* path, char* ret);"""
+    if old not in s:
+        print("警告: debug.h 未找到 __libc_* 声明块")
+        return s, 0
+    new = """#if !defined(STATICBUILD)
+extern void* __libc_malloc(size_t);
+extern void* __libc_realloc(void*, size_t);
+extern void* __libc_calloc(size_t, size_t);
+extern void  __libc_free(void*);
+extern void* __libc_memalign(size_t, size_t);
+#endif
+#endif
+#if defined(STATICBUILD)
+/* box64-build: STATICBUILD 直接用 libc（musl）分配器，避免 __libc_* 声明
+   与 glibc_missing_symbols.h 的 void(void) 声明冲突；
+   box_strdup/box_realpath 宏化（mallochook 的函数定义已裁掉） */
+#define box_malloc      malloc
+#define box_realloc     realloc
+#define box_calloc      calloc
+#define box_free        free
+#define box_memalign    memalign
+#define box_strdup      strdup
+#define box_realpath    realpath
+#else
+#define box_malloc      __libc_malloc
+#define box_realloc     __libc_realloc
+#define box_calloc      __libc_calloc
+#define box_free        __libc_free
+#define box_memalign    __libc_memalign 
+extern char* box_strdup(const char* s);
+extern char* box_realpath(const char* path, char* ret);
+#endif"""
+    s = s.replace(old, new, 1)
+    print("debug.h: 已注入 STATICBUILD 分支（box_* → libc 直用）")
+    return s, 1
+
+
 def _inject_mallochook_cmake(s: str):
     """CMakeLists.txt：STATICBUILD AND BOX32 下追加 mallochook.c 编译源。
     非 static 时上游 if(NOT STATICBUILD) 已包含 mallochook.c，此处条件不触发，
@@ -1569,6 +1627,9 @@ for dirpath, _dirs, files in os.walk(os.path.join(root, "src")):
             n += m
         if fn == "elfloader.c":
             new, m = patch_elfloader_c(new)
+            n += m
+        if fn == "debug.h":
+            new, m = patch_debug_h(new)
             n += m
         if fn == "wrappedlibresolv.c":
             new, m = patch_wrappedlibresolv_c(new)
