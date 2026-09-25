@@ -33,7 +33,34 @@
 ```bash
 # 手动触发编译（必须显式触发，默认不自动跑）
 gh workflow run build.yml
+
+# ci-param 分支：版本参数化构建（box64_ref + static 输入）
+gh workflow run build-box64 --ref ci-param -f box64_ref=v0.2.4 -f static=true
+gh run watch <run-id> --exit-status
 ```
+
+## ci-param 分支：v0.2.4 静态构建（A组，2026-09-25 成功）
+
+- workflow 输入：`box64_ref`（box64 源码 ref）、`static`（STATICBUILD 开关）
+- **v0.2.4 + STATICBUILD=ON 构建成功**（run `36134227359`）：产物
+  `box64-aarch64-musl-v0.2.4-static/box64-aarch64-musl`，8.3MB，
+  `ELF 64-bit LSB executable, ARM aarch64, statically linked, stripped`
+- `scripts/patch-musl-isnanf.py` 承载老版本 STATICBUILD 适配补丁集
+  （每项带判据，main 版已有等价机制时自动跳过）：
+  - `threads.c` musl cancel 最小实现（`__pthread_unwind_buf_t` + 三个强定义 + `__sigsetjmp`→`setjmp`）
+  - `debug.h` 注入 STATICBUILD 分支（`box_*`→libc 直用宏，避免 `__libc_*` 声明与 glibc_missing stub 头 `void(void)` 冲突；`box_strdup/box_realpath` 宏化）
+  - `CMakeLists.txt`：注入 `add_definitions(-DSTATICBUILD)`（老版本只有 option 无宏定义）；去除 `--whole-archive --allow-multiple-definition`（musl 归档全铺导致 CONDBR19 ±1MB 跨距超限）；STATICBUILD 下 `list(REMOVE_ITEM)` 移除 `globalsymbols.c`（其 `optarg/optind/opterr/optopt` 与 musl getopt.o 重复定义）
+  - `elfloader.c`：`startMallocHook` 三段式（#else 空函数）、`checkHookedSymbols` 调用包 `#ifndef`；`main.c`：`endMallocHook`/`init_malloc_hook` 调用包 `#ifndef`（mallochook 裁剪区函数的调用侧兜底）
+  - `custommem.c`/`wrappedlibc.c`：`mmap64(`→`mmap(`（v0.2.4 无 custommmap.c，musl off_t 恒 64 位）
+  - globalsymbols.c 不编后的引用侧适配：`librarian.c` gdk_display/g_threads 特殊段与声明包 `#ifndef`；9 个 wrapped 文件的 `my_checkGlobalGdkDisplay/my_checkGlobalTInfo/my_setGlobalGThreadsInit` 单行调用包 `#else ((void)0);`（兼容无花括号 if 单行体）；`wrappedlibc.c` 注入 `my_updateGlobalOpt/my_checkGlobalOpt` 空实现
+  - `gen-libc-stubs.py`：跳过与源码 `EXPORT` 数据定义同名的 stub（如 `pcre_free` 函数指针 vs 数据声明冲突）
+  - `wrappedlib_init.h` symbol2map STATICBUILD resolved=0、`wrappedlibc_private.h` __xmknod GOM 恢复等（详见脚本内 docstring）
+- 本地复现 CI patch 环节：
+  ```bash
+  SKIP_FTS=1 MUSL_SYMS_FILE=<musl-nm输出> python3 scripts/patch-musl-isnanf.py <box64源码> <注入include目录>
+  ```
+  RET=0 且打印「共替换 N 处」即通过；CI 侧用真实 musl-syms，本地不设该变量时 decls=0 属正常差异。
+- 注意：qemu-user 本地跑该产物会因 box64 固定加载地址（0x34800000 段）与 guest_base 冲突而失败，需真机（aarch64）验证运行。
 
 ## 产物
 
