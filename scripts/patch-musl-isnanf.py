@@ -1261,6 +1261,46 @@ X64_ROBUST_LINUX_INSERT = (
     '            break;\n'
 )
 
+# 方案A：断言检查读 +0x190 槽位（实测），但那里是上层帧的 flag/canary。
+# my274 写假值前先保存原值；后续同线程进入 syscall（my_syscall / x64Syscall_linux）时恢复，
+# 使上层帧 canary 校验在其返回前恢复正确。
+X64_ROBUST_DECL_ANCHOR = (
+    'void EXPORT x64Syscall(x64emu_t *emu)\n'
+)
+X64_ROBUST_DECL_INSERT = (
+    'static struct { int pending; int tid; uintptr_t addr_h; uintptr_t val_h; uintptr_t addr_l; uintptr_t val_l; } rb_rest = {0};\n'
+    '\n'
+)
+
+X64_ROBUST_LINREST_ANCHOR = (
+    'void EXPORT x64Syscall_linux(x64emu_t *emu)\n'
+    '{\n'
+    '    RESET_FLAGS(emu);\n'
+)
+X64_ROBUST_LINREST_INSERT = (
+    '        if(rb_rest.pending && rb_rest.tid == GetTID()) {\n'
+    '            if(rb_rest.addr_h) *(uintptr_t*)rb_rest.addr_h = rb_rest.val_h;\n'
+    '            if(rb_rest.addr_l) *(uintptr_t*)rb_rest.addr_l = rb_rest.val_l;\n'
+    '            printf_log(LOG_NONE, "[ROBUST] restore-lin tid=%d h@%p<-%lx l@%p<-%lx\\n", GetTID(), (void*)rb_rest.addr_h, (unsigned long)rb_rest.val_h, (void*)rb_rest.addr_l, (unsigned long)rb_rest.val_l);\n'
+    '            rb_rest.pending = 0;\n'
+    '        }\n'
+)
+
+X64_ROBUST_MYSCREST_ANCHOR = (
+    'long EXPORT my_syscall(x64emu_t *emu)\n'
+    '{\n'
+    '    static uint32_t warned = 0;\n'
+    '    uint32_t s = R_EDI;\n'
+)
+X64_ROBUST_MYSCREST_INSERT = (
+    '        if(rb_rest.pending && rb_rest.tid == GetTID()) {\n'
+    '            if(rb_rest.addr_h) *(uintptr_t*)rb_rest.addr_h = rb_rest.val_h;\n'
+    '            if(rb_rest.addr_l) *(uintptr_t*)rb_rest.addr_l = rb_rest.val_l;\n'
+    '            printf_log(LOG_NONE, "[ROBUST] restore-mys tid=%d sys=%u h@%p<-%lx l@%p<-%lx\\n", GetTID(), s, (void*)rb_rest.addr_h, (unsigned long)rb_rest.val_h, (void*)rb_rest.addr_l, (unsigned long)rb_rest.val_l);\n'
+    '            rb_rest.pending = 0;\n'
+    '        }\n'
+)
+
 X64_ROBUST_MYSC_ANCHOR = (
     '        case 267:   // sys_readlinkat\n'
     '            return my_readlinkat(emu, S_RSI, (void*)R_RDX, (void*)R_RCX, R_R8);\n'
@@ -1297,8 +1337,16 @@ X64_ROBUST_MYSC_INSERT = (
     '                if(R_RCX) *(size_t*)R_RCX = sizeof(rh);\n'
     '                else printf_log(LOG_NONE, "[ROBUST] my274 R_RCX NULL, len NOT written\\n");\n'
     '                // 两次实测：断言检查帧比 syscall 入口帧高 0x190，补写\n'
+    '                // 方案A：+0x190 槽位原值是上层帧 flag/canary，先保存，后续 syscall 恢复\n'
+    '                rb_rest.pending = 1;\n'
+    '                rb_rest.tid = GetTID();\n'
+    '                rb_rest.addr_h = R_RDX ? (uintptr_t)((char*)R_RDX + 0x190) : 0;\n'
+    '                rb_rest.val_h = R_RDX ? *(uintptr_t*)((char*)R_RDX + 0x190) : 0;\n'
+    '                rb_rest.addr_l = R_RCX ? (uintptr_t)((char*)R_RCX + 0x190) : 0;\n'
+    '                rb_rest.val_l = R_RCX ? *(size_t*)((char*)R_RCX + 0x190) : 0;\n'
     '                if(R_RDX) *(uintptr_t*)((char*)R_RDX + 0x190) = (uintptr_t)&rh;\n'
     '                if(R_RCX) *(size_t*)((char*)R_RCX + 0x190) = sizeof(rh);\n'
+    '                printf_log(LOG_NONE, "[ROBUST] my274 saved h@%p<-%lx l@%p<-%lx pending=1\\n", (void*)rb_rest.addr_h, (unsigned long)rb_rest.val_h, (void*)rb_rest.addr_l, (unsigned long)rb_rest.val_l);\n'
     '                printf_log(LOG_NONE, "[ROBUST] my274 rh=%p sz=%zu next=%p off=0x%lx pend=0x%lx\\n", (void*)&rh, sizeof(rh), (void*)rh.next, (unsigned long)rh.futex_offset, (unsigned long)rh.list_op_pending);\n'
     '                printf_log(LOG_NONE, "[ROBUST] my274 rspslot *hs=%p *ls=%p hs=0x%lx ls=%zu +190hs=%p +190ls=%p\\n",\n'
     '                    (void*)(R_RSP ? *(uintptr_t*)(R_RSP + 0x10) : 0),\n'
@@ -1341,6 +1389,37 @@ def patch_x64syscall_c(s: str):
             total += 1
         else:
             print("警告: x64syscall.c 未找到 my_syscall robust 锚点", file=sys.stderr)
+    # 方案A：rb_rest 声明 + 两个 syscall 入口的恢复逻辑
+    if "} rb_rest = {0};" not in s:
+        if X64_ROBUST_DECL_ANCHOR in s:
+            s = s.replace(
+                X64_ROBUST_DECL_ANCHOR,
+                X64_ROBUST_DECL_INSERT + X64_ROBUST_DECL_ANCHOR,
+                1,
+            )
+            total += 1
+        else:
+            print("警告: x64syscall.c 未找到 rb_rest 声明锚点", file=sys.stderr)
+    if "restore-lin" not in s:
+        if X64_ROBUST_LINREST_ANCHOR in s:
+            s = s.replace(
+                X64_ROBUST_LINREST_ANCHOR,
+                X64_ROBUST_LINREST_ANCHOR + X64_ROBUST_LINREST_INSERT,
+                1,
+            )
+            total += 1
+        else:
+            print("警告: x64syscall.c 未找到 x64Syscall_linux 恢复锚点", file=sys.stderr)
+    if "restore-mys" not in s:
+        if X64_ROBUST_MYSCREST_ANCHOR in s:
+            s = s.replace(
+                X64_ROBUST_MYSCREST_ANCHOR,
+                X64_ROBUST_MYSCREST_ANCHOR + X64_ROBUST_MYSCREST_INSERT,
+                1,
+            )
+            total += 1
+        else:
+            print("警告: x64syscall.c 未找到 my_syscall 恢复锚点", file=sys.stderr)
     return s, total
 
 
