@@ -27,6 +27,6 @@ jobs:
       - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
-          name: box64-aarch64-musl-${{ replace(inputs.box64_ref, '/', '-') }}-${{ inputs.static && 'static' || 'dyn' }}
+          name: box64-aarch64-musl-${{ inputs.box64_ref }}-${{ inputs.static && 'static' || 'dyn' }}
           path: /tmp/box64-aarch64-musl
           if-no-files-found: error
