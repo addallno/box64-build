@@ -11,6 +11,10 @@ on:
         description: 'STATICBUILD 静态链接（false = 动态）'
         type: boolean
         default: true
+      debug:
+        description: '保留符号（不 strip，用于 gdb 崩溃定位）'
+        type: boolean
+        default: false
 
 jobs:
   build:
@@ -22,11 +26,12 @@ jobs:
         env:
           BOX64_REF: ${{ inputs.box64_ref }}
           STATICBUILD: ${{ inputs.static }}
+          DEBUG_KEEP_SYM: ${{ inputs.debug }}
         run: bash scripts/build-box64-musl.sh
 
       - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
-          name: box64-aarch64-musl-${{ inputs.box64_ref }}-${{ inputs.static && 'static' || 'dyn' }}
+          name: box64-aarch64-musl-${{ inputs.box64_ref }}-${{ inputs.static && 'static' || 'dyn' }}${{ inputs.debug && '-sym' || '' }}
           path: /tmp/box64-aarch64-musl
           if-no-files-found: error

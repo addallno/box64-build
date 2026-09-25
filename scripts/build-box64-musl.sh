@@ -351,6 +351,10 @@ make -j$(nproc)
 echo "==> strip 静态产物"
 file ./box64
 cp ./box64 /tmp/box64-aarch64-musl
-$TOOLCHAIN/bin/$MUSL_ARCH-strip /tmp/box64-aarch64-musl || true
+if [ "${DEBUG_KEEP_SYM:-false}" = "true" ]; then
+  echo "==> DEBUG_KEEP_SYM=true，保留符号（gdb 定位用）"
+else
+  $TOOLCHAIN/bin/$MUSL_ARCH-strip /tmp/box64-aarch64-musl || true
+fi
 file /tmp/box64-aarch64-musl
 ls -lh /tmp/box64-aarch64-musl
