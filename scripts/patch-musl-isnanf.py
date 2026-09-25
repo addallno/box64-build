@@ -181,6 +181,23 @@ int pthread_attr_setaffinity_np(pthread_attr_t* attr, size_t cpusize, void* cpus
 
 typedef struct threadstack_s {"""
 
+# 6) 老版本（如 v0.2.4）用 glibc 的 __pthread_unwind_buf_t + __pthread_*_cancel 族，
+# musl 两者皆无（且 glibc_missing_symbols 的 weak stub 会使其静默失效）→ 本地强定义
+THREADS_CANCEL_ANCHOR = "typedef void(*vFv_t)();"
+THREADS_CANCEL_PATCH = """
+// box64-build: musl cancel — musl 无 glibc 的 __pthread_unwind_buf_t 与
+// __pthread_*_cancel 族；此处给最小强定义（盖过 glibc_missing_symbols 的 weak stub）。
+// register/unregister 空操作；unwind 直接 longjmp 回 register 时的 setjmp 点。
+typedef struct __pthread_unwind_buf_musl {
+    struct __jmp_buf_tag __cancel_jmp_buf[1];
+} __pthread_unwind_buf_t;
+void __pthread_register_cancel(__pthread_unwind_buf_t* buf) { (void)buf; }
+void __pthread_unregister_cancel(__pthread_unwind_buf_t* buf) { (void)buf; }
+void __pthread_unwind_next(__pthread_unwind_buf_t* buf) { longjmp(buf->__cancel_jmp_buf, 1); }
+"""
+THREADS_SIGSETJMP_OLD = "if(__sigsetjmp((struct __jmp_buf_tag*)(void*)pbuff->__cancel_jmp_buf, 0)) {"
+THREADS_SIGSETJMP_NEW = "if(setjmp(pbuff->__cancel_jmp_buf)) {"
+
 
 def patch_threads_c(s: str):
     """threads.c 的 musl 适配：cleanup 声明/mmap64/类型/dlvsym/attr affinity stub。"""
@@ -197,6 +214,17 @@ def patch_threads_c(s: str):
             print(f"警告: threads.c 未找到片段: {old.splitlines()[0][:60]}")
     if THREADS_STUB_PATCH not in s and THREADS_STUB_ANCHOR in s:
         s = s.replace(THREADS_STUB_ANCHOR, THREADS_STUB_PATCH, 1)
+        count += 1
+    # 老版本 glibc cancel 依赖（新版本无 __pthread_unwind_buf_t 则不触发）
+    if "__pthread_unwind_buf_t" in s and "box64-build: musl cancel" not in s:
+        if THREADS_CANCEL_ANCHOR in s:
+            s = s.replace(THREADS_CANCEL_ANCHOR,
+                          THREADS_CANCEL_ANCHOR + THREADS_CANCEL_PATCH, 1)
+            count += 1
+        else:
+            print("警告: threads.c 未找到 musl cancel 注入锚点 vFv_t")
+    if THREADS_SIGSETJMP_OLD in s:
+        s = s.replace(THREADS_SIGSETJMP_OLD, THREADS_SIGSETJMP_NEW, 1)
         count += 1
     return s, count
 
