@@ -199,6 +199,51 @@ THREADS_SIGSETJMP_OLD = "if(__sigsetjmp((struct __jmp_buf_tag*)(void*)pbuff->__c
 THREADS_SIGSETJMP_NEW = "if(setjmp(pbuff->__cancel_jmp_buf)) {"
 
 
+def patch_threads_key_guard(s: str) -> tuple:
+    """backport main 的 thread_key_ready 守卫：v0.2.4 的 thread_get_emu 直接
+    pthread_getspecific(thread_key)，而 key_create 在 init_pthread_helper 内、
+    晚于 NewLibrarian→NewBridge→NewBrick 的首次 thread_get_emu 调用（栈：
+    main→NewBox64Context→NewLibrarian→NewBrick→thread_get_emu 崩 tss_get）。
+    glibc 对未创建 key 宽容返回 NULL，musl tss_get 解引用 NULL specific 即崩。
+    main 用 thread_key_ready 守卫（threads.c L183/264/271/1468）→ 就绪前
+    thread_get_emu 返回 NULL（NewBrick→my_mmap 接受 NULL，已由 main 验证）。"""
+    if "thread_key_ready" in s:
+        return s, 0
+    m = 0
+    # 1) 就绪标志声明（对齐 main threads.c L183）
+    old = "static pthread_key_t thread_key;"
+    if old in s:
+        s = s.replace(old, old + "\nstatic int thread_key_ready = 0;", 1)
+        m += 1
+    else:
+        print("警告: threads.c 未找到 thread_key 声明", file=sys.stderr)
+    # 2) key_create 后置位（对齐 main L1467-1468 的顺序）
+    old = ("\tpthread_key_create(&thread_key, emuthread_destroy);\n"
+           "\tpthread_setspecific(thread_key, NULL);")
+    if old in s:
+        s = s.replace(old,
+                      "\tpthread_key_create(&thread_key, emuthread_destroy);\n"
+                      "\tthread_key_ready = 1;\n"
+                      "\tpthread_setspecific(thread_key, NULL);", 1)
+        m += 1
+    else:
+        print("警告: threads.c 未找到 pthread_key_create 锚点", file=sys.stderr)
+    # 3) thread_get_emu 入口守卫（对齐 main L271；set 调用点均晚于 ready，不加）
+    old = ("x64emu_t* thread_get_emu()\n{\n"
+           "\temuthread_t *et = (emuthread_t*)pthread_getspecific(thread_key);")
+    if old in s:
+        s = s.replace(old,
+                      "x64emu_t* thread_get_emu()\n{\n"
+                      "\tif(!thread_key_ready) return NULL;\n"
+                      "\temuthread_t *et = (emuthread_t*)pthread_getspecific(thread_key);", 1)
+        m += 1
+    else:
+        print("警告: threads.c 未找到 thread_get_emu 锚点", file=sys.stderr)
+    if m:
+        print(f"threads.c: thread_key_ready 守卫注入 {m} 处（musl tss_get 崩溃修复）")
+    return s, m
+
+
 def patch_threads_c(s: str):
     """threads.c 的 musl 适配：cleanup 声明/mmap64/类型/dlvsym/attr affinity stub。"""
     count = 0
@@ -1781,6 +1826,8 @@ for dirpath, _dirs, files in os.walk(os.path.join(root, "src")):
             n += m
         if fn == "threads.c":
             new, m = patch_threads_c(new)
+            n += m
+            new, m = patch_threads_key_guard(new)
             n += m
         if fn == "threads32.c":
             new, m = patch_threads32_c(new)
