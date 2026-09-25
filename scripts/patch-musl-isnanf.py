@@ -953,6 +953,7 @@ def patch_wrapped_globalrefs(s: str):
     if "box64-build: globalsymbols refs disabled" in s:
         return s, 0
     m = 0
+    counts = {}
     for sym in ("my_checkGlobalGdkDisplay", "my_checkGlobalTInfo",
                 "my_setGlobalGThreadsInit"):
         # else 补 ((void)0);：调用可能位于无花括号 if 单行体，纯 #ifndef
@@ -964,10 +965,11 @@ def patch_wrapped_globalrefs(s: str):
         if k:
             s = s2
             m += k
+            counts[sym] = k
     if m:
         s = "/* box64-build: globalsymbols refs disabled */\n" + s
-    print(f"wrapped({sym}): {m} 处 my_* 刷新调用包 #ifndef STATICBUILD"
-          if m else "")
+        detail = "、".join(f"{name}×{k}" for name, k in counts.items())
+        print(f"wrapped: {m} 处 my_* 刷新调用包 #ifndef STATICBUILD（{detail}）")
     return s, m
 
 
