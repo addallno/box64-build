@@ -283,6 +283,9 @@ echo "==> 打 musl 补丁（isnanf -> isnan / fts 注入 / stub 头）"
 mkdir -p $WORK/include
 python3 $GITHUB_WORKSPACE/scripts/patch-musl-isnanf.py $WORK/box64 $WORK/include
 
+echo "==> 打 syscallwrap 补丁（sendmmsg/shm，静态程序 DNS 依赖）"
+python3 $GITHUB_WORKSPACE/scripts/patch_syscalls.py $WORK/box64
+
 echo "==> 生成 musl 缺失符号 stub（gen-libc-stubs.py）"
 MUSL_SYMS_OPT=""
 if [ -s "$MUSL_SYMS" ]; then
