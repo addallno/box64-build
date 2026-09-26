@@ -68,7 +68,7 @@ musl 静态运行时 `dlopen(NULL)/dlsym(任意 handle)` 全部返回 0（`Dynam
   - 反证排除：div64 C 源/编译产物（`bl __udivti3; cmp x1,#0; b.gt`）逻辑正确；musl gcc16.1 -O2 同款 probe 远端原生跑 `cmp(div > 0xffffffffffffffffL)=0` 且商正确；flagstest/flagstest2（含 ADX/BMI2/128 位 mul）全绿；`BOX64_DYNAREC=0` 与 dynarec 同错。
 - **修复**：`build-box64-musl.sh` 的 gen-libc-stubs 调用加 `--no-stub __udivti3 __divti3 __umodti3 __modti3 __udivmodti4 __udivdi3 __divdi3 __umoddi3 __moddi3 __udivmoddi4`（编译器 RT 黑名单，libgcc 提供定义，`&N` 取址由强符号满足）。
 - **排查副产物（坑）**：`BOX64_LOG=3` == `LOG_NEVER`（debug.h），`applyCustomRules()`（env.c:152）会降级为 `log=2` 并自动 `dump=1` → 此构建**无指令级 trace 档**，只能源码打点；日志中 "Variables overridden" 即此机制。proot 内写 `/media/termux/home/logs/*.log` 事后不可见，须写 `/root/` 并 grep 到 stdout。
-- **状态**：打点验证版 CI 已出（36226795730 + `--no-stub` 修复随下一轮 CI）；待 minidiv/divtest/bntest2 与 native diff 零 → x509test → tlsx86 → steamcmd 逐级复测后撤打点出正式版。
+- **状态：已修复并全链验证 ✅**（2026-09-26）。CI 36227644544（修复+打点）→ minidiv/divtest/bntest2 与 native diff 零（`quot=0xaaaaaaaaaaaaaaac`、`nnmod/mod_inverse` 全对）；x509test `X509_OK PKEY id=0x198 bits=256`（native 同值，原 `PUBKEY_FAIL`）；tlsx86 `TLS_OK ver=TLSv1.3 cipher=TLS_AES_256_GCM_SHA384`；正式版 CI 36228057671（已撤打点，产物 grep 无 DIV64/DIVT）部署 `~/box64-patched`；steamcmd 对照实验：旧版 `Retrying → ERROR (No Connection)` vs 新版 `Waiting for client config OK → Waiting for user info OK`，connection_log `ConnectionCompleted + RecvMsgClientLogOnResponse 'OK' → [Logged On]`，本窗口零 ConnectFailed，16:07:02 正常 LogOff。首次运行偶发卡 `Loading Steam API...`（"didn't shutdown cleanly → update check" 后），重跑即通，未见于正式版复测。
 
 ## 三、遗留未完成项
 
