@@ -58,9 +58,21 @@ musl 静态运行时 `dlopen(NULL)/dlsym(任意 handle)` 全部返回 0（`Dynam
 ### B-09 SSL 证书错误（曾出现、已消失）
 - 历史 stderr：`src/common/opensslconnection.cpp (1706): unable to load trusted SSL root certificates`。当前 proot 内 `/etc/ssl/certs/ca-certificates.crt` 存在（244 证书，ca-certificates 已装），最近三次运行 0 计数。
 
+### B-10 `__udivti3` weak stub 抢占 libgcc → host 128 位除法商恒 0 → BN mod 系全错 → SSL 证书解析失败（根因已定位，修复待 CI 验证）
+- **症状链**：`BN_mod_inverse`/`BN_mod`/`BN_mod_exp` 结果错误 → `X509_PUBKEY_get0: decode error x_pubkey.c:458`/`unable to find public key parameters statem_clnt.c:1904`（EC P-256 证书解析失败）→ TLS 握手失败 → CM WebSocket 全灭 → steamcmd `ERROR (No Connection)`。bntest 首个失败点 `FAIL inverse check`；x509test native `X509_OK PKEY id=0x198 bits=256` vs box `PUBKEY_FAIL`。
+- **根因**：`wrappedlibc_private.h:2762 GOM(__udivti3, HFHH)` 被 `gen-libc-stubs.py` 提取为**返回 0 的 weak stub**，`glibc_missing_symbols.c` 作为 CMake 无条件 object **直接参与链接** → weak 定义先满足 `div64` 对 `__udivti3` 的 undefined → **libgcc.a 强符号成员不再拉入** → host 侧 `dvd / s`（128/128 除法）商恒 0（高 64 位 = 参数寄存器 x1 残值）。`__umodti3` 不在提取源 → 无 stub → libgcc 照常拉入 → **余数始终正确**（该不对称是定案关键）。`my___udivti3`（guest 用）`return a/b` 同样递归到坏 stub。
+- **后果**（解释器 `div64` @x64primop.c）：商=0/残值 → `if (div > 0xffffffffffffffffL)` 被残值高位触发 `INTR_RAISE_DIV0`（`emu->error |= ERR_DIVBY0=2`，不杀进程）→ **RAX/RDX 不写回**（minidiv 表现 `q=5 r=2` 输入保持）；小除数场景商静默写 0。dynarec 的 RDX≠0 路径 `CALL(const_div64)` 同中招；RDX==0 走内联 UDIV 快路径不受影响（故日常程序没事，BN 的 128/64 除法必炸）。x86 bn_div_words → `divq hi≠0` 全错 → `BN_div`/`nnmod` 错 → mod 系全线错。
+- **证据**（解释器打点版 [DIVT]/[DIV64]，CI run 36226795730）：
+  - `[DIVT] s=3 rax=5 rdx=2 rip=4018e7` → `[DIV64] dvd_hi=2 dvd_lo=5 quot_hi=2 quot_lo=0 mod=1 DIV0_overflow` → `[DIVT]-> rax=5 rdx=2 err=2`（除数读取正确、RIP 正确、mod=1 正确，仅商错）。
+  - `s=40 dvd_lo=3b7 → quot=0 mod=37`（应商 0xE）、`s=8 dvd_lo=600000 → quot=0 mod=0`（应 0xC0000）——**商恒 0 或 (残值<<64)，mod 全对**。
+  - 反证排除：div64 C 源/编译产物（`bl __udivti3; cmp x1,#0; b.gt`）逻辑正确；musl gcc16.1 -O2 同款 probe 远端原生跑 `cmp(div > 0xffffffffffffffffL)=0` 且商正确；flagstest/flagstest2（含 ADX/BMI2/128 位 mul）全绿；`BOX64_DYNAREC=0` 与 dynarec 同错。
+- **修复**：`build-box64-musl.sh` 的 gen-libc-stubs 调用加 `--no-stub __udivti3 __divti3 __umodti3 __modti3 __udivmodti4 __udivdi3 __divdi3 __umoddi3 __moddi3 __udivmoddi4`（编译器 RT 黑名单，libgcc 提供定义，`&N` 取址由强符号满足）。
+- **排查副产物（坑）**：`BOX64_LOG=3` == `LOG_NEVER`（debug.h），`applyCustomRules()`（env.c:152）会降级为 `log=2` 并自动 `dump=1` → 此构建**无指令级 trace 档**，只能源码打点；日志中 "Variables overridden" 即此机制。proot 内写 `/media/termux/home/logs/*.log` 事后不可见，须写 `/root/` 并 grep 到 stdout。
+- **状态**：打点验证版 CI 已出（36226795730 + `--no-stub` 修复随下一轮 CI）；待 minidiv/divtest/bntest2 与 native diff 零 → x509test → tlsx86 → steamcmd 逐级复测后撤打点出正式版。
+
 ## 三、遗留未完成项
 
-- ADX 测试：/tmp/test_adx.c 待编译验证。
+- ~~ADX 测试：/tmp/test_adx.c 待编译验证。~~ 已完成：flagstest2（mulx/adcx/adox/bn_mul_add 链/rep movsq/lzcnt/tzcnt）native 与 box 均 ALL_OK。
 - get_robust_list 断言未处理。
 - `crashhandler.so.bak` 未恢复（linux64/ 下 crashhandler.so 与 .bak 并存）。
 - v024 运行时机制移植（main 静态符号绑定）：用户已选搁置。

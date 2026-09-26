@@ -308,7 +308,14 @@ python3 $GITHUB_WORKSPACE/scripts/gen-libc-stubs.py \
   --force-stub WrapXImage --force-stub UnwrapXImage \
   --force-stub malloc_trim \
   --force-stub-data __sys_siglist=1024 --force-stub-data my32_xinput_opcode=4 \
+  --no-stub __udivti3 --no-stub __divti3 --no-stub __umodti3 --no-stub __modti3 \
+  --no-stub __udivmodti4 --no-stub __udivdi3 --no-stub __divdi3 \
+  --no-stub __umoddi3 --no-stub __moddi3 --no-stub __udivmoddi4 \
   -v
+# --no-stub: 编译器运行时（libgcc）符号，绝不生成 weak stub——
+# 否则直接参与链接的 stub 会以 weak 定义抢先满足 undefined，阻止 libgcc.a
+# 强符号拉入，导致 host 侧 128 位除法 __udivti3 返回 0（div64 商错/DIV0 误判 →
+# BN mod 系全错 → SSL 证书解析失败，见 BUGS.md B-0x）
 
 echo "==> 复制缺失符号文件到构建目录"
 mkdir -p $WORK/include
