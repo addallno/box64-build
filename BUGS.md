@@ -83,7 +83,23 @@ musl 静态运行时 `dlopen(NULL)/dlsym(任意 handle)` 全部返回 0（`Dynam
 - **症状**：dynarec 跑 steamcmd 约 50% 概率输出停在 `Loading Steam API...`（rc=124 timeout），无 [CLONERAW]、无登录判据；解释器（`BOX64_DYNAREC=0`）稳定完成登录。
 - **已排除**：clone 线程创建失败（B-11 修复后仍复现，卡死时无 clone 打点）；单开关效应——`BIGBLOCK=0/CALLRET=0/SAFEFLAGS=2/AVX=0` 各有成败、`BIGBLOCK=0` 连跑 2 次 1 过 1 卡、默认连跑 3 次全卡 → **非确定性开关 bug，属偶发竞态**（与 B-06 退出期 `could not immediately join` 同域嫌疑）。
 - **已知缓解**：重跑即通（概率性）；解释器模式必通但慢。
-- **下一步（未做）**：卡死时抓现场（stuck.sh：主线程 `hrtimer_nanosleep` 轮询、guest 线程存活）对比成功轮的线程完成条件；嫌疑为 dynarec 下线程同步（futex/条件变量）偶发漏唤醒。
+- **现场采样（b12probe.sh，14 线程）**：主线程 `hrtimer_nanosleep` 轮询（syscall 101）；12 个 guest 线程全在 `futex_wait_queue_me`、2 个在 `SyS_epoll_wait`（IOCP Thread 0、IPC:CSteamEngin）→ 所有 worker 均休眠、无忙等，**主线程在等一个永不到达的条件（工作项/唤醒丢失形态）**，非死循环。
+- **已排除（subagent 审查后定向实验）**：P0-1 内存序——`BOX64_DYNAREC_STRONGMEM=1` 对照 6 轮 4 卡（与基线 ~50-60% 无差异）；P0-4 epoll_pwait2 超时溢出——修复后累计 12 轮 8 卡 4 GOT_CONFIG、0 LOGIN_OK（与基线相当，guest 不走该路径）。
+- **嫌疑收窄（dynarec 独有无锁路径，subagent 报告1不确定①）**：`dynablock.c:447` 一带 `need_lock=0` 时 `FreeDynablock(block,0,0)`/`getDB`/`MarkDynablock` 无锁操作块表与 jump table——填块失败竞态可致跳转表残缺 → 偶发执行流丢失，待验证。
+- **下一步**：验证 need_lock=0 路径是否真无锁（assert/插桩）；2 个 epoll 线程行为深入（无法从 wchan 区分正常等事件与永久阻塞）。
+
+### 批次1 修复清单（subagent 三报告落地，CI run 36247763029，已远端验证无回归）
+- **P0-2** `arm64_lock.S` storeb/store/store_dd 屏障在 store 后 → 改 release store（`dmb ish; stlr*`）。
+- **P0-3** `arm64_atomic_storeifref_d` casal 后缺 `cmp` 就 `bne`（NZCV 残留）→ 补 cmp 再 bne。
+- **P0-4** epoll_pwait2 `1<<31` int 溢出恒真 → INT_MIN 无限阻塞 → 改 0x7fffffff 夹取。
+- **P1-7** my_epoll_wait/pwait 无界 VLA → 入口 `maxevents<=0||>4096` 拒绝。
+- **P1-8** `arm64_lock_write_dq` 缺 ldxp/stlxp 失败重试 → 补 CAS 环（read_dq 已有前导 dmb，原报告该项不成立）。
+- **B10 附带**：syscalls 表补 `recvmmsg(308)`（与 sendmmsg(307) 对称，原缺 → ENOSYS）。
+- **B-10 防复发**：gen-libc-stubs `--no-stub-regex` 7 条内置默认（div/mod/mul/add/sub/ash/float/fix/unord/extents 族）+ `FORBIDDEN_STUB` 检查（含 `__memcmpeq` 恒0隐患、`__cxa_pure_virtual`——本地 grep 结论错误，CI 实测在 func_refs 中）+ `--check` 接通 + SMART_EXTRA 两个实现（__memcmpeq→memcmp、__cxa_pure_virtual→abort）。
+- **构建期 fail-fast（#6/#7）**：patch-musl-isnanf.py 15 处 assert + 23 处 print警告 改 `fail()` 收集、末尾 `sys.exit(1)`；build 脚本 gcc -E(clean) 失败改硬错。
+- **管线（#1/#2/#3/#13）**：objcopy 符号分离（box64+同源 .debug 双产物，artifact 12.2MB）；actions/cache（工具链 tarball+ccache，CI 4m8s）；`timeout-minutes: 45`；**qemu-user 冒烟测试**（minidiv/thrmin，DIV_OK/THR_OK，B-10 类静默错误 5 分钟红灯）。
+- **GCC14 兼容**：gen-libc-stubs `.c` 模板 include `<math.h>`（lgamma 隐式声明由 warning 升 error）。
+- **远端验证**：thrmin/mthrd/x509test(cmcert.pem 参数)/tlsx86/bntest2 全绿；steamcmd 12 轮 8 卡 4 GOT（无回归、无改善）。
 
 ## 三、遗留未完成项
 
@@ -92,3 +108,6 @@ musl 静态运行时 `dlopen(NULL)/dlsym(任意 handle)` 全部返回 0（`Dynam
 - `crashhandler.so.bak` 未恢复（linux64/ 下 crashhandler.so 与 .bak 并存）。
 - v024 运行时机制移植（main 静态符号绑定）：用户已选搁置。
 - v024 符号版产物：/tmp/fix-art/、/tmp/sym-art/（28.9MB）保留。
+- **开发环境（本地 WSL，非 box64 bug）**：① GitHub SSH 22 被拒 → `~/.ssh/config` 走 `ssh.github.com:443`；② 本地 Windows 侧 SteamTools 向 GitHub 注入 MITM 证书 → gh/curl 需 `SSL_CERT_FILE=/tmp/full-ca.pem`（curl 用 `CURL_CA_BUNDLE=`），CA 合并文件由 Windows 根库导出的 steamtools-ca.pem 拼成；③ artifact 下载 gh run download 卡 → `curl -C -` 断点续传。
+- **subagent 审查未修项（报告1）**：P1-5 my_pthread_once 10ms 强制放行；P1-6 guest sigset 不转换（signalfd/pthread_sigmask 直通）；P2-9 pthread 静默丢 guest 栈 + SetFS 注释；P2-10 TERMUX 分支 attr 假成功。
+- 目标机 CPU：**Cortex-A53×8**（无 dotprod/fp16/atomics/rcpc）→ A1 优化按 `-march=armv8-a+crypto+crc -mtune=cortex-a53` 落地，禁用 armv8.2-a 系（SIGILL）。
