@@ -18,6 +18,13 @@ import sys
 import urllib.request
 import subprocess
 
+# ---- fail-fast：锚点/结构缺失一律收集，末尾统一非零退出（此前仅 print 警告 → 静默 exit 0）
+FAILURES = []
+
+def fail(msg):
+    FAILURES.append(msg)
+    print(f"patch-musl-isnanf: [缺失] {msg}", file=sys.stderr)
+
 REPL = {  # 优先匹配更长的 f 变体
     "isnanf(": "isnan(",
     "isinff(": "isinf(",
@@ -216,7 +223,7 @@ def patch_threads_key_guard(s: str) -> tuple:
         s = s.replace(old, old + "\nstatic int thread_key_ready = 0;", 1)
         m += 1
     else:
-        print("警告: threads.c 未找到 thread_key 声明", file=sys.stderr)
+        fail(" threads.c 未找到 thread_key 声明")
     # 2) key_create 后置位（对齐 main L1467-1468 的顺序）
     old = ("\tpthread_key_create(&thread_key, emuthread_destroy);\n"
            "\tpthread_setspecific(thread_key, NULL);")
@@ -227,7 +234,7 @@ def patch_threads_key_guard(s: str) -> tuple:
                       "\tpthread_setspecific(thread_key, NULL);", 1)
         m += 1
     else:
-        print("警告: threads.c 未找到 pthread_key_create 锚点", file=sys.stderr)
+        fail(" threads.c 未找到 pthread_key_create 锚点")
     # 3) thread_get_emu 入口守卫（对齐 main L271；set 调用点均晚于 ready，不加）
     old = ("x64emu_t* thread_get_emu()\n{\n"
            "\temuthread_t *et = (emuthread_t*)pthread_getspecific(thread_key);")
@@ -238,7 +245,7 @@ def patch_threads_key_guard(s: str) -> tuple:
                       "\temuthread_t *et = (emuthread_t*)pthread_getspecific(thread_key);", 1)
         m += 1
     else:
-        print("警告: threads.c 未找到 thread_get_emu 锚点", file=sys.stderr)
+        fail(" threads.c 未找到 thread_get_emu 锚点")
     if m:
         print(f"threads.c: thread_key_ready 守卫注入 {m} 处（musl tss_get 崩溃修复）")
     return s, m
@@ -256,7 +263,7 @@ def patch_threads_c(s: str):
             s = s.replace(old, new, 1)
             count += 1
         else:
-            print(f"警告: threads.c 未找到片段: {old.splitlines()[0][:60]}")
+            fail(f" threads.c 未找到片段: {old.splitlines()[0][:60]}")
     if THREADS_STUB_PATCH not in s and THREADS_STUB_ANCHOR in s:
         s = s.replace(THREADS_STUB_ANCHOR, THREADS_STUB_PATCH, 1)
         count += 1
@@ -267,7 +274,7 @@ def patch_threads_c(s: str):
                           THREADS_CANCEL_ANCHOR + THREADS_CANCEL_PATCH, 1)
             count += 1
         else:
-            print("警告: threads.c 未找到 musl cancel 注入锚点 vFv_t")
+            fail(" threads.c 未找到 musl cancel 注入锚点 vFv_t")
     if THREADS_SIGSETJMP_OLD in s:
         s = s.replace(THREADS_SIGSETJMP_OLD, THREADS_SIGSETJMP_NEW, 1)
         count += 1
@@ -348,7 +355,7 @@ def patch_threads32_c(s: str):
             s = s.replace(old, new, 1)
             count += 1
         else:
-            print(f"警告: threads32.c 未找到片段: {old.splitlines()[0][:60]}")
+            fail(f" threads32.c 未找到片段: {old.splitlines()[0][:60]}")
     # 注意：affinity stub 只注入 threads.c（box64-build 修复 multiple definition，
     # threads32.c 的调用由 threads.c 的外部链接定义满足，不可重复注入）
     return s, count
@@ -407,7 +414,8 @@ def patch_libc_net32_c(s: str):
         (NET32_QHOOK_64, "dst->qhook = from_ptrv(src->__glibc_unused_qhook);"),
     ):
         if src_frag in s:
-            assert s.count(src_frag) == 1, f"libc_net32.c 替换片段不唯一: {src_frag!r}"
+            if not (s.count(src_frag) == 1):
+                print("patch-musl-isnanf: " + (f"libc_net32.c 替换片段不唯一: {src_frag!r}"), file=sys.stderr); sys.exit(1)
             s = s.replace(src_frag, dst_frag, 1)
             count += 1
     return s, count
@@ -452,7 +460,8 @@ def inject_fts(root: str, include_dir: str = None):
         s = f.read()
     if "${BOX64_ROOT}/src/libtools/fts.c" not in s:
         anchor = CMAKE_FTS_ANCHOR
-        assert anchor in s, f"CMakeLists.txt 找不到锚点 {anchor}"
+        if not (anchor in s):
+            print("patch-musl-isnanf: " + (f"CMakeLists.txt 找不到锚点 {anchor}"), file=sys.stderr); sys.exit(1)
         s = s.replace(anchor, anchor + '\n    "${BOX64_ROOT}/src/libtools/fts.c"', 1)
         with open(cmake, "w", encoding="utf-8") as f:
             f.write(s)
@@ -613,11 +622,13 @@ def patch_wrappedlibc_c(s: str):
 
     # musl 无 getrlimit64（getrlimit 即 64 位版本），struct rlimit64 → struct rlimit
     if "struct rlimit64* rlim" in s:
-        assert s.count("struct rlimit64* rlim") == 1
+        if not (s.count("struct rlimit64* rlim") == 1):
+            print("patch-musl-isnanf: " + ("断言失败: s.count('struct rlimit64* rlim') == 1"), file=sys.stderr); sys.exit(1)
         s = s.replace("struct rlimit64* rlim", "struct rlimit* rlim", 1)
         count += 1
     if "getrlimit64(resource, rlim)" in s:
-        assert s.count("getrlimit64(resource, rlim)") == 1
+        if not (s.count("getrlimit64(resource, rlim)") == 1):
+            print("patch-musl-isnanf: " + ("断言失败: s.count('getrlimit64(resource, rlim)') == 1"), file=sys.stderr); sys.exit(1)
         s = s.replace("getrlimit64(resource, rlim)", "getrlimit(resource, rlim)", 1)
         count += 1
 
@@ -625,7 +636,8 @@ def patch_wrappedlibc_c(s: str):
     # getGlibcCachedTid 里改用 GetTID()（musl 无 glibc tid 缓存机制，直接取真实 tid，
     # 使 updateGlibcTidCache 中 cached==real 恒成立而跳过写缓存）。
     if "pid_t tid = lock.__data.__owner;" in s:
-        assert s.count("pid_t tid = lock.__data.__owner;") == 1
+        if not (s.count("pid_t tid = lock.__data.__owner;") == 1):
+            print("patch-musl-isnanf: " + ("断言失败: s.count('pid_t tid = lock.__data.__owner;') == 1"), file=sys.stderr); sys.exit(1)
         s = s.replace("pid_t tid = lock.__data.__owner;", "pid_t tid = GetTID();", 1)
         count += 1
 
@@ -740,7 +752,8 @@ def inject_obstack(root: str, include_dir: str = None):
         # 锚点：主 ELFLOADER_SRC 无条件列表（auxval.c 后），
         # 这样 Android 与 Linux 都能编译，为 myalign32.c（BOX32 必编）提供 _obstack_* 符号
         anchor = '"${BOX64_ROOT}/src/libtools/auxval.c"'
-        assert anchor in s, f"CMakeLists.txt 找不到锚点 {anchor}"
+        if not (anchor in s):
+            print("patch-musl-isnanf: " + (f"CMakeLists.txt 找不到锚点 {anchor}"), file=sys.stderr); sys.exit(1)
         s = s.replace(anchor, anchor + "\n    " + src_entry, 1)
         with open(cmake, "w", encoding="utf-8") as f:
             f.write(s)
@@ -811,7 +824,8 @@ def inject_error(root: str, include_dir: str = None):
     src_entry = '"${BOX64_ROOT}/src/libtools/error_glibc.c"'
     if src_entry not in s:
         anchor = '"${BOX64_ROOT}/src/libtools/obstack_glibc.c"'
-        assert anchor in s, f"CMakeLists.txt 找不到锚点 {anchor}"
+        if not (anchor in s):
+            print("patch-musl-isnanf: " + (f"CMakeLists.txt 找不到锚点 {anchor}"), file=sys.stderr); sys.exit(1)
         s = s.replace(anchor, anchor + "\n    " + src_entry, 1)
         with open(cmake, "w", encoding="utf-8") as f:
             f.write(s)
@@ -841,7 +855,8 @@ def inject_scandirat(root: str):
     src_entry = '"${BOX64_ROOT}/src/libtools/scandirat_glibc.c"'
     if src_entry not in s:
         anchor = '"${BOX64_ROOT}/src/libtools/error_glibc.c"'
-        assert anchor in s, f"CMakeLists.txt 找不到锚点 {anchor}"
+        if not (anchor in s):
+            print("patch-musl-isnanf: " + (f"CMakeLists.txt 找不到锚点 {anchor}"), file=sys.stderr); sys.exit(1)
         s = s.replace(anchor, anchor + "\n    " + src_entry, 1)
         with open(cmake, "w", encoding="utf-8") as f:
             f.write(s)
@@ -898,8 +913,10 @@ def patch_mallochook_c(s: str):
     # 块A：box_strdup / box_realpath 函数定义
     open_a = "char* box_strdup(const char* s) {"
     close_a = "}\n\nstatic size_t pot(size_t l) {"
-    assert open_a in s, "mallochook.c 找不到 box_strdup 锚点"
-    assert close_a in s, "mallochook.c 找不到 box_realpath 结束锚点"
+    if not (open_a in s):
+        print("patch-musl-isnanf: " + ("mallochook.c 找不到 box_strdup 锚点"), file=sys.stderr); sys.exit(1)
+    if not (close_a in s):
+        print("patch-musl-isnanf: " + ("mallochook.c 找不到 box_realpath 结束锚点"), file=sys.stderr); sys.exit(1)
     s = s.replace(open_a,
                   "#ifndef STATICBUILD\n"
                   "// box64-build: static 下 box_strdup/box_realpath 为宏，此处定义须裁掉\n"
@@ -919,7 +936,8 @@ def patch_mallochook_c(s: str):
     # 块B：EXPORT interpose 区 → init_malloc_hook
     open_b = "// redefining all libc memory allocation routines"
     close_b = "#undef SUPER\n#else//ANDROID"
-    assert open_b in s, "mallochook.c 找不到 interpose 锚点"
+    if not (open_b in s):
+        print("patch-musl-isnanf: " + ("mallochook.c 找不到 interpose 锚点"), file=sys.stderr); sys.exit(1)
     s = s.replace(open_b,
                   "#ifndef STATICBUILD\n"
                   "// box64-build: static 裁剪 interpose 区（与 musl 重复符号）\n"
@@ -932,7 +950,8 @@ def patch_mallochook_c(s: str):
         s = s.replace("#undef SUPER",
                       "#undef SUPER\n#endif // box64-build", 1)
     else:
-        assert False, "mallochook.c 找不到 #undef SUPER 锚点"
+        if not (False):
+            print("patch-musl-isnanf: " + ("mallochook.c 找不到 #undef SUPER 锚点"), file=sys.stderr); sys.exit(1)
     n += 1
     return s, n
 
@@ -1026,7 +1045,7 @@ def patch_wrappedlibc_opt_stubs(s: str):
         return s, 0
     anchor = "EXPORT int my_getopt(int argc, char* const argv[], const char *optstring)"
     if anchor not in s:
-        print("警告: wrappedlibc.c 未找到 my_getopt 锚点", file=sys.stderr)
+        fail(" wrappedlibc.c 未找到 my_getopt 锚点")
         return s, 0
     s = s.replace(anchor,
                   "#ifdef STATICBUILD\n"
@@ -1051,7 +1070,7 @@ def patch_librarian_globalrefs(s: str):
         m += 1
         print("librarian.c: my_GetGTKDisplay 等声明包 #ifndef STATICBUILD")
     else:
-        print("警告: librarian.c 未找到 my_GetGTKDisplay 声明对", file=sys.stderr)
+        fail(" librarian.c 未找到 my_GetGTKDisplay 声明对")
     pat = re.compile(
         r"(    // some special case symbol, defined inside box64 itself\n"
         r"    if\(!strcmp\(name, \"gdk_display\"\)\) \{.*?"
@@ -1065,7 +1084,7 @@ def patch_librarian_globalrefs(s: str):
         print(f"librarian.c: {k} 处 gdk_display/g_threads 特殊段包"
               " #ifndef STATICBUILD")
     else:
-        print("警告: librarian.c 未找到 gdk_display 特殊段", file=sys.stderr)
+        fail(" librarian.c 未找到 gdk_display 特殊段")
     return s, m
 
 
@@ -1092,7 +1111,7 @@ extern void* __libc_memalign(size_t, size_t);
 extern char* box_strdup(const char* s);
 extern char* box_realpath(const char* path, char* ret);"""
     if old not in s:
-        print("警告: debug.h 未找到 __libc_* 声明块")
+        fail(" debug.h 未找到 __libc_* 声明块")
         return s, 0
     new = """#if !defined(STATICBUILD)
 extern void* __libc_malloc(size_t);
@@ -1182,7 +1201,7 @@ def _inject_staticbuild_def(s: str) -> tuple:
         anchor = ('option(STATICBUILD "Set to ON to have a static build '
                   '(Warning, not working)" ${STATICBUILD})')
         if anchor not in s:
-            print("警告: CMakeLists.txt 未找到 option(STATICBUILD) 锚点",
+            fail(" CMakeLists.txt 未找到 option(STATICBUILD) 锚点",
                   file=sys.stderr)
         else:
             s = s.replace(anchor, anchor + "\n"
@@ -1233,7 +1252,8 @@ def _inject_mallochook_cmake(s: str):
         if '"${BOX64_ROOT}/src/mallochook.c"' in s:
             print("CMakeLists.txt: mallochook.c 已在编译源列表，跳过注入")
             return s, 0
-        assert anchor in s, "CMakeLists.txt 找不到 mallochook 注入锚点"
+        if not (anchor in s):
+            print("patch-musl-isnanf: " + ("CMakeLists.txt 找不到 mallochook 注入锚点"), file=sys.stderr); sys.exit(1)
     block = ('"${BOX64_ROOT}/src/librarian/globalsymbols.c"\n'
              "        )\n"
              "endif()\n"
@@ -1291,7 +1311,8 @@ def inject_missing_symbols(root: str):
         subprocess.run(cmd, check=True)
     else:
         priv = os.path.join(root, "src", "wrapped", "wrappedlibc_private.h")
-        assert os.path.exists(priv), f"找不到 {priv}"
+        if not (os.path.exists(priv)):
+            print("patch-musl-isnanf: " + (f"找不到 {priv}"), file=sys.stderr); sys.exit(1)
         script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gen_missing_symbols.py")
         print(f"回退 gen_missing_symbols.py（gen-libc-stubs.py 不存在）")
         subprocess.run([sys.executable, script, priv, dst_c], check=True)
@@ -1304,7 +1325,8 @@ def inject_missing_symbols(root: str):
     src_entry = '"${BOX64_ROOT}/src/libtools/glibc_missing_symbols.c"'
     if src_entry not in s:
         anchor = '"${BOX64_ROOT}/src/libtools/scandirat_glibc.c"'
-        assert anchor in s, f"CMakeLists.txt 找不到锚点 {anchor}"
+        if not (anchor in s):
+            print("patch-musl-isnanf: " + (f"CMakeLists.txt 找不到锚点 {anchor}"), file=sys.stderr); sys.exit(1)
         s = s.replace(anchor, anchor + "\n    " + src_entry, 1)
         changed = True
         print("CMakeLists.txt: 已把 glibc_missing_symbols.c 加入无条件 ELFLOADER_SRC")
@@ -1433,7 +1455,7 @@ def patch_wrappedlib_init_h(s: str):
     # 已打过补丁或上游已改，幂等跳过
     if WRAPPEDLIB_INIT_SYMBOL2_NEW in s:
         return s, 0
-    print("警告: wrappedlib_init.h 未找到 symbol2map resolved 锚点", file=sys.stderr)
+    fail(" wrappedlib_init.h 未找到 symbol2map resolved 锚点")
     return s, 0
 
 
@@ -1467,7 +1489,7 @@ def patch_wrappedlibc_private_h(s: str):
         return s.replace(XMKNOB_BLOCK_OLD, XMKNOB_BLOCK_NEW, 1), 1
     if XMKNOB_BLOCK_NEW in s:
         return s, 0  # 幂等
-    print("警告: wrappedlibc_private.h 未找到 __xmknod STATICBUILD 锚点", file=sys.stderr)
+    fail(" wrappedlibc_private.h 未找到 __xmknod STATICBUILD 锚点")
     return s, 0
 
 
@@ -1552,7 +1574,7 @@ def patch_generated_wrapper_h(s: str):
     r = _lift_fn_block(s, WRAPPER_H_DECL_OLD, WRAPPER_H_DECL_NEW)
     if r is not None:
         return r
-    print("警告: wrapper.h 未找到 iFEipup STATICBUILD 锚点", file=sys.stderr)
+    fail(" wrapper.h 未找到 iFEipup STATICBUILD 锚点")
     return s, 0
 
 
@@ -1567,7 +1589,7 @@ def patch_generated_wrapper_c(s: str):
             s = s.replace(old, new, 1)
             total += 1
         elif new not in s:
-            print(f"警告: wrapper.c 未找到 iFEipup {name} 锚点", file=sys.stderr)
+            fail(f" wrapper.c 未找到 iFEipup {name} 锚点")
     return s, total
 
 
@@ -1577,7 +1599,7 @@ def patch_functions_list_txt(s: str):
         return s.replace(FUNCTIONS_LIST_OLD, FUNCTIONS_LIST_NEW, 1), 1
     if FUNCTIONS_LIST_NEW in s:
         return s, 0
-    print("警告: functions_list.txt 未找到 iFEipup STATICBUILD 锚点", file=sys.stderr)
+    fail(" functions_list.txt 未找到 iFEipup STATICBUILD 锚点")
     return s, 0
 
 
@@ -1715,7 +1737,7 @@ def patch_x64syscall_c(s: str):
         s = s.replace(X64_ROBUST_TABLE_OLD, X64_ROBUST_TABLE_NEW, 1)
         total += 1
     elif X64_ROBUST_TABLE_NEW not in s:
-        print("警告: x64syscall.c 未找到 robust 表锚点", file=sys.stderr)
+        fail(" x64syscall.c 未找到 robust 表锚点")
     # 幂等：用 case 行判断（锚点插入后仍保留，新旧 insert 均含此 case 行）
     if "case 273: // sys_set_robust_list\n" not in s:
         if X64_ROBUST_LINUX_ANCHOR in s:
@@ -1726,7 +1748,7 @@ def patch_x64syscall_c(s: str):
             )
             total += 1
         else:
-            print("警告: x64syscall.c 未找到 x64Syscall_linux robust 锚点", file=sys.stderr)
+            fail(" x64syscall.c 未找到 x64Syscall_linux robust 锚点")
     if "sys_get_robust_list（libc syscall 路径）" not in s:
         if X64_ROBUST_MYSC_ANCHOR in s:
             s = s.replace(
@@ -1736,7 +1758,7 @@ def patch_x64syscall_c(s: str):
             )
             total += 1
         else:
-            print("警告: x64syscall.c 未找到 my_syscall robust 锚点", file=sys.stderr)
+            fail(" x64syscall.c 未找到 my_syscall robust 锚点")
     # 方案A：rb_rest 声明 + 两个 syscall 入口的恢复逻辑
     if "} rb_rest = {0};" not in s:
         if X64_ROBUST_DECL_ANCHOR in s:
@@ -1747,7 +1769,7 @@ def patch_x64syscall_c(s: str):
             )
             total += 1
         else:
-            print("警告: x64syscall.c 未找到 rb_rest 声明锚点", file=sys.stderr)
+            fail(" x64syscall.c 未找到 rb_rest 声明锚点")
     if "restore-lin" not in s:
         if X64_ROBUST_LINREST_ANCHOR in s:
             s = s.replace(
@@ -1757,7 +1779,7 @@ def patch_x64syscall_c(s: str):
             )
             total += 1
         else:
-            print("警告: x64syscall.c 未找到 x64Syscall_linux 恢复锚点", file=sys.stderr)
+            fail(" x64syscall.c 未找到 x64Syscall_linux 恢复锚点")
     if "restore-mys" not in s:
         if X64_ROBUST_MYSCREST_ANCHOR in s:
             s = s.replace(
@@ -1767,7 +1789,7 @@ def patch_x64syscall_c(s: str):
             )
             total += 1
         else:
-            print("警告: x64syscall.c 未找到 my_syscall 恢复锚点", file=sys.stderr)
+            fail(" x64syscall.c 未找到 my_syscall 恢复锚点")
     return s, total
 
 
@@ -1924,4 +1946,9 @@ for dirpath, _dirs, files in os.walk(os.path.join(root, "src")):
             print(f"{path}: {n} 处")
 print(f"共替换 {total} 处")
 if not total:
-    print("警告: 未找到需要替换的 glibc 浮点宏")
+    fail("未找到需要替换的 glibc 浮点宏（整个浮点 patch 未生效）")
+if FAILURES:
+    print(f"patch-musl-isnanf: {len(FAILURES)} 处锚点缺失，patch 失败：", file=sys.stderr)
+    for _m in FAILURES:
+        print(f"  - {_m}", file=sys.stderr)
+    sys.exit(1)

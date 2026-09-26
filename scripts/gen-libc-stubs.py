@@ -603,6 +603,9 @@ SMART_MATH = {
 SMART_EXTRA = {
     # glibc 内部 errno 访问器（等价 __errno_location）
     "__errno": "void* __errno(void) { return (void*)&errno; }",
+    # glibc memcmp 等价物（musl 不提供）：恒 0 stub = 恒“相等”，会静默破坏
+    # guest 字符串/内容比较，必须转发 memcmp（签名 iFppL 与之完全一致）
+    "__memcmpeq": "int __memcmpeq(const void* a, const void* b, size_t n) { return memcmp(a, b, n); }",
     # glibc 向 C99 的转发（返回 int，strfrom*）
     "strfromd":   "int strfromd(char* buf, size_t n, const char* fmt, double x) { return 0; }",
     "strfromf":   "int strfromf(char* buf, size_t n, const char* fmt, float x) { return 0; }",
@@ -1432,6 +1435,9 @@ def main():
                     help="强制为某数据符号生成 stub，格式 NAME=SIZE（即使不在缺失列表）")
     ap.add_argument("--no-stub", action="append", default=[],
                     help="强制跳过某符号（即使缺失）")
+    ap.add_argument("--no-stub-regex", action="append", default=[],
+                    help="按正则（fullmatch）批量排除，兜底上游新增编译器 RT 符号，"
+                         "如 '__u?(div|mod|divmod)(t[if]|d[if])[0-9]+'")
     ap.add_argument("--musl-header-syms", default=None,
                     help="musl 头文件可见符号列表文件（交叉编译器预处理提取）")
     ap.add_argument("--musl-header-decls", default=None,
@@ -1510,9 +1516,27 @@ def main():
     missing_funcs = {s for s in func_refs if s not in musl_syms}
     missing_datas = {s: sz for s, (sz, _m) in data_refs.items() if s not in musl_syms}
 
+    # FORBIDDEN_STUB：这些符号绝不能是恒 0/NULL 的 weak stub（会静默产生错误语义，
+    # 比 B-10 编译器 RT 恒 0 更隐蔽）。命中且无智能实现（smart）且将要生成 stub → 硬错。
+    # __memcmpeq：glibc memcmp==0 降级目标，musl 不提供，恒 0 恒“相等”（见 SMART_EXTRA 正实现）
+    FORBIDDEN_STUB = {
+        "__memcmpeq", "__stack_chk_fail", "__tls_get_addr",
+        "__cxa_atexit", "__cxa_finalize", "__cxa_pure_virtual",
+        "__errno_location",
+    }
+
     for s in args.no_stub:
         missing_funcs.discard(s)
         missing_datas.pop(s, None)
+    if args.no_stub_regex:
+        import re as _re
+        _pats = [_re.compile(p) for p in args.no_stub_regex]
+        _hit = sorted(s for s in missing_funcs
+                      if any(p.fullmatch(s) for p in _pats))
+        for s in _hit:
+            missing_funcs.discard(s)
+        if _hit:
+            print(f"[no-stub-regex] 排除 {len(_hit)} 个: {' '.join(_hit)}")
     for s in args.force_stub:
         missing_funcs.add(s)
     for item in args.force_stub_data:
@@ -1520,6 +1544,14 @@ def main():
         missing_datas[nm.strip()] = int(sz) if sz.strip() else 64
 
     smart = build_smart_map(missing_funcs)
+
+    # FORBIDDEN_STUB 检查：进了 missing、无智能实现、即将被生成为 stub → 失败
+    forbidden_hit = sorted(FORBIDDEN_STUB & (missing_funcs - set(smart)))
+    if forbidden_hit:
+        print("[FATAL] 下列高危符号将被生成恒 0/NULL stub（会静默产生错误语义），"
+              "请加入 SMART_EXTRA 正实现或 --no-stub 排除:",
+              " ".join(forbidden_hit), file=sys.stderr)
+        sys.exit(1)
 
     # 3.5 加载 musl 头文件声明集（供 generate_stubs 和 generate_header 使用）
     musl_header_syms = set()

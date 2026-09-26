@@ -19,19 +19,61 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+
+      - name: 缓存 musl 工具链 tarball
+        uses: actions/cache@v4
+        with:
+          path: /tmp/musl-cross-cache
+          key: musl-cross-20260515-aarch64-${{ runner.os }}
+
+      - name: 缓存 ccache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/ccache
+          key: ccache-box64-${{ runner.os }}-${{ inputs.box64_ref }}
+          restore-keys: |
+            ccache-box64-${{ runner.os }}-
+
+      - name: 安装 ccache
+        run: sudo apt-get update && sudo apt-get install -y ccache
 
       - name: 交叉编译 box64 (aarch64 musl, BOX32 + DYNAREC)
         env:
           BOX64_REF: ${{ inputs.box64_ref }}
           STATICBUILD: ${{ inputs.static }}
           DEBUG_KEEP_SYM: ${{ inputs.debug }}
+          MUSL_CACHE_DIR: /tmp/musl-cross-cache
+          CCACHE_DIR: /tmp/ccache
         run: bash scripts/build-box64-musl.sh
+
+      # 冒烟测试：qemu-user 模拟 aarch64 box64（强制解释器），再解释 x86 测试件。
+      # 覆盖 B-10（128 位除法 stub）与 B-11（pthread clone）两类静默错误。
+      - name: 冒烟测试 (qemu-user + 解释器)
+        if: ${{ inputs.static }}
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y qemu-user-static
+          gcc -O1 -static -o /tmp/minidiv_x86 tests/minidiv.c
+          gcc -O1 -static -pthread -o /tmp/thrmin_x86 tests/thrmin.c
+          cp /tmp/box64-aarch64-musl /tmp/box64-smoke
+          chmod +x /tmp/box64-smoke
+          echo "== minidiv =="
+          BOX64_DYNAREC=0 timeout 60 qemu-aarch64-static /tmp/box64-smoke /tmp/minidiv_x86 2>&1 | tee /tmp/minidiv.log
+          grep -q DIV_OK /tmp/minidiv.log
+          echo "== thrmin =="
+          BOX64_DYNAREC=0 timeout 60 qemu-aarch64-static /tmp/box64-smoke /tmp/thrmin_x86 2>&1 | tee /tmp/thrmin.log
+          grep -q THR_OK /tmp/thrmin.log
+          echo "冒烟测试通过"
 
       - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
           name: box64-aarch64-musl-${{ inputs.box64_ref }}-${{ inputs.static && 'static' || 'dyn' }}${{ inputs.debug && '-sym' || '' }}
-          path: /tmp/box64-aarch64-musl
+          path: |
+            /tmp/box64-aarch64-musl
+            /tmp/box64-aarch64-musl.debug
           if-no-files-found: error
+          retention-days: 30

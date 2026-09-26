@@ -8,15 +8,27 @@ MUSL_ARCH=aarch64-unknown-linux-musl
 WORK=/tmp/box64-build
 TOOLCHAIN=/opt/$MUSL_ARCH
 
-echo "==> 下载 musl 交叉工具链"
+echo "==> 下载 musl 交叉工具链（优先本地/CI 缓存，避免每次拉数百 MB）"
 mkdir -p $WORK
 cd $WORK
-curl -fsSL -o musl.tar.xz \
-  "https://github.com/cross-tools/musl-cross/releases/download/$MUSL_VERSION/$MUSL_ARCH.tar.xz"
+MUSL_TARBALL=$MUSL_ARCH-$MUSL_VERSION.tar.xz
+MUSL_CACHE_DIR=${MUSL_CACHE_DIR:-/tmp/musl-cross-cache}
+mkdir -p "$MUSL_CACHE_DIR"
+if [ -s "$MUSL_CACHE_DIR/$MUSL_TARBALL" ]; then
+  echo "命中工具链缓存: $MUSL_CACHE_DIR/$MUSL_TARBALL"
+  cp "$MUSL_CACHE_DIR/$MUSL_TARBALL" musl.tar.xz
+else
+  curl -fsSL -o musl.tar.xz \
+    "https://github.com/cross-tools/musl-cross/releases/download/$MUSL_VERSION/$MUSL_ARCH.tar.xz"
+  # 写回缓存供 actions/cache 保存（同 key 的 cache 不可变，无需 sha256 双检）
+  cp musl.tar.xz "$MUSL_CACHE_DIR/$MUSL_TARBALL"
+fi
 tar xf musl.tar.xz -C /opt
 
 CROSS_CC=$TOOLCHAIN/bin/$MUSL_ARCH-gcc
 $CROSS_CC --version
+# 供 gen-libc-stubs.py --check 做 stub 语法校验（找不到交叉 gcc 会静默跳过）
+export MUSL_CC=$CROSS_CC
 
 echo "==> 提取 musl 符号列表（用于精确生成缺失符号 stub）"
 MUSL_SYMS=/tmp/musl-syms.txt
@@ -240,8 +252,7 @@ r_clean = subprocess.run(
     [cc, '-E'] + flags + ['/tmp/all_musl_headers_nounDEF.c'],
     capture_output=True, text=True)
 if r_clean.returncode != 0:
-    print(f'警告: gcc -E (clean) 失败（退出码 {r_clean.returncode}）', file=sys.stderr)
-    decls = set()
+    sys.exit(f'gcc -E (clean) 失败（退出码 {r_clean.returncode}），musl 头声明提取不可信，中止构建')
 else:
     decls = set(re.findall(r'[A-Za-z_][A-Za-z0-9_]*', r_clean.stdout))
 print(f'预处理提取标识符(undef后): {len(decls)}')
@@ -289,6 +300,9 @@ python3 $GITHUB_WORKSPACE/scripts/patch_syscalls.py $WORK/box64
 echo "==> 打 clone 修复补丁（绕过 musl clone() 包装层 EINVAL，带 [CLONERAW] 打点，验证后撤）"
 python3 $GITHUB_WORKSPACE/scripts/patch_clone_raw.py $WORK/box64
 
+echo "==> 打 P0 修复补丁（arm64_lock release/casal flags/epoll 越界与溢出）"
+python3 $GITHUB_WORKSPACE/scripts/patch_p0fixes.py $WORK/box64
+
 echo "==> 生成 musl 缺失符号 stub（gen-libc-stubs.py）"
 MUSL_SYMS_OPT=""
 if [ -s "$MUSL_SYMS" ]; then
@@ -311,11 +325,21 @@ python3 $GITHUB_WORKSPACE/scripts/gen-libc-stubs.py \
   --no-stub __udivti3 --no-stub __divti3 --no-stub __umodti3 --no-stub __modti3 \
   --no-stub __udivmodti4 --no-stub __udivdi3 --no-stub __divdi3 \
   --no-stub __umoddi3 --no-stub __moddi3 --no-stub __udivmoddi4 \
+  --no-stub-regex '__u?(div|mod|divmod)(t[if]|d[if])[0-9]+' \
+  --no-stub-regex '__(u?mul|add|sub)(ti|di|tf|df)[0-9]*' \
+  --no-stub-regex '__(a|l)sh(lt|rt|l|r)ti[0-9]*' \
+  --no-stub-regex '__float(t[if]|d[if])[dsft]f[0-9]*' \
+  --no-stub-regex '__fix(un)?.*t[if][0-9]*' \
+  --no-stub-regex '__unord(t[if]|d[if])[0-9]*' \
+  --no-stub-regex '__(extends|trunc)[a-z]*[0-9]*' \
+  --check \
   -v
 # --no-stub: 编译器运行时（libgcc）符号，绝不生成 weak stub——
 # 否则直接参与链接的 stub 会以 weak 定义抢先满足 undefined，阻止 libgcc.a
 # 强符号拉入，导致 host 侧 128 位除法 __udivti3 返回 0（div64 商错/DIV0 误判 →
-# BN mod 系全错 → SSL 证书解析失败，见 BUGS.md B-0x）
+# BN mod 系全错 → SSL 证书解析失败，见 BUGS.md B-10）
+# --no-stub-regex: 兜底上游新增 RT 符号（逐个列举必然漏网），fullmatch 防误伤
+# --check: 交叉 gcc -fsyntax-only 校验生成的 stub.c（MUSL_CC 已 export）
 
 echo "==> 复制缺失符号文件到构建目录"
 mkdir -p $WORK/include
@@ -350,9 +374,17 @@ export CI=true
 # musl 无 PTHREAD_ERRORCHECK/RECURSIVE_MUTEX_INITIALIZER 静态宏，按 musl mutex 结构体布局注入：
 # pthread_mutex_t = { union { int __i[10]; } __u; }，_m_type=__u.__i[0]（0=NORMAL 1=RECURSIVE 2=ERRORCHECK）
 MUTEX_MACROS='-DPTHREAD_ERRORCHECK_MUTEX_INITIALIZER={{{2}}} -DPTHREAD_RECURSIVE_MUTEX_INITIALIZER={{{1}}}'
+# ccache 加速重复构建（无 ccache 时留空，展开为空参数被 shell 移除）
+CCACHE_OPT=""
+if command -v ccache >/dev/null 2>&1; then
+  export CCACHE_DIR=${CCACHE_DIR:-/tmp/ccache}
+  mkdir -p "$CCACHE_DIR"
+  CCACHE_OPT="-DCMAKE_C_COMPILER_LAUNCHER=ccache"
+fi
 cmake .. \
   -DCI=1 \
   -DCMAKE_C_COMPILER=$CROSS_CC \
+  $CCACHE_OPT \
   -DCMAKE_C_FLAGS="-D_GNU_SOURCE -D_DEFAULT_SOURCE -I$WORK/include -include $WORK/include/mmap64.h -Wno-implicit-function-declaration -fno-builtin $MUTEX_MACROS" \
   -DARM_DYNAREC=ON \
   -DBOX32=ON \
@@ -361,13 +393,18 @@ cmake .. \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo
 make -j$(nproc)
 
-echo "==> strip 静态产物"
+echo "==> 符号处理（objcopy 分离调试符号 + strip，失败即中止）"
 file ./box64
 cp ./box64 /tmp/box64-aarch64-musl
+OBJCOPY=$TOOLCHAIN/bin/$MUSL_ARCH-objcopy
 if [ "${DEBUG_KEEP_SYM:-false}" = "true" ]; then
   echo "==> DEBUG_KEEP_SYM=true，保留符号（gdb 定位用）"
 else
-  $TOOLCHAIN/bin/$MUSL_ARCH-strip /tmp/box64-aarch64-musl || true
+  # 调试符号与二进制同一次构建分离，保证 DWARF 与代码严格同源（另起 debug 构建会 ref 错位）
+  $OBJCOPY --only-keep-debug /tmp/box64-aarch64-musl /tmp/box64-aarch64-musl.debug
+  $TOOLCHAIN/bin/$MUSL_ARCH-strip /tmp/box64-aarch64-musl
+  $OBJCOPY --add-gnu-debuglink=/tmp/box64-aarch64-musl.debug /tmp/box64-aarch64-musl
+  ls -lh /tmp/box64-aarch64-musl.debug
 fi
 file /tmp/box64-aarch64-musl
 ls -lh /tmp/box64-aarch64-musl
