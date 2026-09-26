@@ -85,8 +85,9 @@ musl 静态运行时 `dlopen(NULL)/dlsym(任意 handle)` 全部返回 0（`Dynam
 - **已知缓解**：重跑即通（概率性）；解释器模式必通但慢。
 - **现场采样（b12probe.sh，14 线程）**：主线程 `hrtimer_nanosleep` 轮询（syscall 101）；12 个 guest 线程全在 `futex_wait_queue_me`、2 个在 `SyS_epoll_wait`（IOCP Thread 0、IPC:CSteamEngin）→ 所有 worker 均休眠、无忙等，**主线程在等一个永不到达的条件（工作项/唤醒丢失形态）**，非死循环。
 - **已排除（subagent 审查后定向实验）**：P0-1 内存序——`BOX64_DYNAREC_STRONGMEM=1` 对照 6 轮 4 卡（与基线 ~50-60% 无差异）；P0-4 epoll_pwait2 超时溢出——修复后累计 12 轮 8 卡 4 GOT_CONFIG、0 LOGIN_OK（与基线相当，guest 不走该路径）。
-- **嫌疑收窄（dynarec 独有无锁路径，subagent 报告1不确定①）**：`dynablock.c:447` 一带 `need_lock=0` 时 `FreeDynablock(block,0,0)`/`getDB`/`MarkDynablock` 无锁操作块表与 jump table——填块失败竞态可致跳转表残缺 → 偶发执行流丢失，待验证。
-- **下一步**：验证 need_lock=0 路径是否真无锁（assert/插桩）；2 个 epoll 线程行为深入（无法从 wchan 区分正常等事件与永久阻塞）。
+- ~~**嫌疑收窄：dynablock.c:447 need_lock=0 无锁路径**~~ **已排除（2026-09-26 源码核对）**：`need_lock=0` 是**持锁重入设计**——`DBGetBlock` 在 `mutex_lock` 持有状态下调 `internalDBGetBlock(...,need_lock=0,...)` 防自死锁（dynablock.c:516/537），非无锁竞态。
+- **新主嫌疑（读侧内存序）**：`getDB`（custommem.c:2146-2200）多级跳转表 `box64_jmptbl3[i3][i2][i1][i0]` + `*(dynablock_t**)(ret-8)` 读取**全为普通 load、无 acquire 屏障**；写侧发布链 FillBlock64 写 code/db 指针 → `addJumpTableIfDefault64`/`native_lock_storeifref2`（CAS release）。ARM 弱序下读侧可能见到半发布条目 → 执行流跳坏 → 偶发卡死。dynarec-only ✓（解释器不用 jmptbl）✓ STRONGMEM 不覆盖（非 LOCK 前缀路径）。待核对 getDBBlock/getJumpAddress64 读侧调用点后决定是否 patch。
+- **下一步**：核对读侧 acquire 缺失点写 patch；2 个 epoll 线程行为深入（wchan 无法区分正常等事件与永久阻塞）。
 
 ### 批次1 修复清单（subagent 三报告落地，CI run 36247763029，已远端验证无回归）
 - **P0-2** `arm64_lock.S` storeb/store/store_dd 屏障在 store 后 → 改 release store（`dmb ish; stlr*`）。
@@ -101,6 +102,14 @@ musl 静态运行时 `dlopen(NULL)/dlsym(任意 handle)` 全部返回 0（`Dynam
 - **GCC14 兼容**：gen-libc-stubs `.c` 模板 include `<math.h>`（lgamma 隐式声明由 warning 升 error）。
 - **远端验证**：thrmin/mthrd/x509test(cmcert.pem 参数)/tlsx86/bntest2 全绿；steamcmd 12 轮 8 卡 4 GOT（无回归、无改善）。
 
+### 批次2 修复清单（A1/A2/B5/B6 + P0-3b，CI 36250467200 / 36251816378，已远端验证全绿）
+- **A1+A2（7825c6d）**：build 脚本 `-DCMAKE_C_FLAGS` 追加 `-march=armv8-a+crypto+crc -mtune=cortex-a53 -O3`（目标机 8×Cortex-A53 无 dotprod/fp16/atomics/rcpc，禁 armv8.2-a 系防 SIGILL）。产物 10,293,696B（-O3 后体积增大属预期）。
+- **B5（7f2fe8c，`patch_b5tsc.py`）**：ARM64 `readFreq` 纯 `mrs cntfrq_el0` 读 0 无兜底 → freq<1MHz 走 box64_rdtsc=1 每次 rdtsc 用 CLOCK_MONOTONIC_COARSE（ms 粒度）。patch 加 cntfrq==0 时 cntvct+50ms 校准（≈19MHz）。**实测 ✓ `hardware counter 19.0 MHz emulating 2.4 GHz`**（B-08 `Hardware counter too slow` 告警消除）。
+- **B6（零代码）**：env `BOX64_SYSINFO_CACHED=1/NCPU=8/CPUNAME=Cortex-A53/FREQUENCY=1GHz` + `BOX64_DYNACACHE_COMPRESS=0` → **`lscpu popen 告警消除** ✓（须显式给全，缺省 ncpu=1/Unknown/1GHz）。
+- **B1（sigprocmask 优化）暂缓**：dynablock.c 两函数 7 处 pthread_sigmask 必须包围 lock 段（防 SIGSEGV handler 同线程自锁），命中路径无法安全省略，需先量化频率。
+- **P0-3b（2513a29，通用正确性）**：LSE 版 `arm64_atomic_storeifref`/`_d` 失败路径返回期望值（x3/w3）而非 casal 实际结果 → 调用者 `(ret==ref)` 误判成功；patch_p0fixes.py 增补第 6/7 组锚修复（反汇编验证 `mov x0,x2`）。A53 无 LSE 不受影响。
+- **远端回归 ✓**：B5 19MHz 打点、thrmin/mthrd/x509/tlsx86/bntest2 全绿、steamcmd 6 轮 3 卡 3 GOT=基线；cloneprobe 新旧产物均 rc=139（探针自身问题，非回归）。
+
 ## 三、遗留未完成项
 
 - ~~ADX 测试：/tmp/test_adx.c 待编译验证。~~ 已完成：flagstest2（mulx/adcx/adox/bn_mul_add 链/rep movsq/lzcnt/tzcnt）native 与 box 均 ALL_OK。
@@ -108,6 +117,6 @@ musl 静态运行时 `dlopen(NULL)/dlsym(任意 handle)` 全部返回 0（`Dynam
 - `crashhandler.so.bak` 未恢复（linux64/ 下 crashhandler.so 与 .bak 并存）。
 - v024 运行时机制移植（main 静态符号绑定）：用户已选搁置。
 - v024 符号版产物：/tmp/fix-art/、/tmp/sym-art/（28.9MB）保留。
-- **开发环境（本地 WSL，非 box64 bug）**：① GitHub SSH 22 被拒 → `~/.ssh/config` 走 `ssh.github.com:443`；② 本地 Windows 侧 SteamTools 向 GitHub 注入 MITM 证书 → gh/curl 需 `SSL_CERT_FILE=/tmp/full-ca.pem`（curl 用 `CURL_CA_BUNDLE=`），CA 合并文件由 Windows 根库导出的 steamtools-ca.pem 拼成；③ artifact 下载 gh run download 卡 → `curl -C -` 断点续传。
+- **开发环境（本地 WSL，非 box64 bug）**：① GitHub SSH 22 被拒 → `~/.ssh/config` 走 `ssh.github.com:443`；② 本地 Windows 侧 SteamTools 向 GitHub 注入 MITM 证书 → gh/curl 需 `SSL_CERT_FILE=/tmp/full-ca.pem`（curl 用 `CURL_CA_BUNDLE=`），CA 合并文件由 Windows 根库导出的 steamtools-ca.pem 拼成；③ artifact 下载 gh run download 卡 → `curl -C -` 断点续传；④ **`pkill -f`/`pgrep -f` 模式含在自身命令行会杀掉/误报自己的 shell**——曾致解压从未执行，用 `pgrep -f 'patt[^x]'` 类方括号技巧防自匹配；⑤ x86 测试件在 ARM 下直接执行=SIGILL rc=132，必须 `box64` 包装调用。
 - **subagent 审查未修项（报告1）**：P1-5 my_pthread_once 10ms 强制放行；P1-6 guest sigset 不转换（signalfd/pthread_sigmask 直通）；P2-9 pthread 静默丢 guest 栈 + SetFS 注释；P2-10 TERMUX 分支 attr 假成功。
 - 目标机 CPU：**Cortex-A53×8**（无 dotprod/fp16/atomics/rcpc）→ A1 优化按 `-march=armv8-a+crypto+crc -mtune=cortex-a53` 落地，禁用 armv8.2-a 系（SIGILL）。
