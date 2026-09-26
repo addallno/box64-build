@@ -606,6 +606,9 @@ SMART_EXTRA = {
     # glibc memcmp 等价物（musl 不提供）：恒 0 stub = 恒“相等”，会静默破坏
     # guest 字符串/内容比较，必须转发 memcmp（签名 iFppL 与之完全一致）
     "__memcmpeq": "int __memcmpeq(const void* a, const void* b, size_t n) { return memcmp(a, b, n); }",
+    # C++ 纯虚调用（musl 不提供）：恒 0 stub 会让纯虚调用静默返回、继续执行垃圾状态，
+    # 标准语义是立即 abort（前置声明避免依赖生成文件的 include）
+    "__cxa_pure_virtual": "void __cxa_pure_virtual(void) { extern void abort(void); abort(); }",
     # glibc 向 C99 的转发（返回 int，strfrom*）
     "strfromd":   "int strfromd(char* buf, size_t n, const char* fmt, double x) { return 0; }",
     "strfromf":   "int strfromf(char* buf, size_t n, const char* fmt, float x) { return 0; }",
@@ -1528,15 +1531,25 @@ def main():
     for s in args.no_stub:
         missing_funcs.discard(s)
         missing_datas.pop(s, None)
-    if args.no_stub_regex:
-        import re as _re
-        _pats = [_re.compile(p) for p in args.no_stub_regex]
-        _hit = sorted(s for s in missing_funcs
-                      if any(p.fullmatch(s) for p in _pats))
-        for s in _hit:
-            missing_funcs.discard(s)
-        if _hit:
-            print(f"[no-stub-regex] 排除 {len(_hit)} 个: {' '.join(_hit)}")
+    # 内置兜底正则：上游新增编译器 RT 符号漏进 stub 即 B-10 类静默数值错。
+    # 默认恒生效（覆盖 build 与 patch-musl-isnanf 两条调用路径），--no-stub-regex 可叠加。
+    import re as _re
+    _regex_all = list(dict.fromkeys([
+        r"__u?(div|mod|divmod)(t[if]|d[if])[0-9]+",
+        r"__(u?mul|add|sub)(ti|di|tf|df)[0-9]*",
+        r"__(a|l)sh(lt|rt|l|r)ti[0-9]*",
+        r"__float(t[if]|d[if])[dsft]f[0-9]*",
+        r"__fix(un)?.*t[if][0-9]*",
+        r"__unord(t[if]|d[if])[0-9]*",
+        r"__(extends|trunc)[a-z]*[0-9]*",
+    ] + (args.no_stub_regex or [])))
+    _pats = [_re.compile(p) for p in _regex_all]
+    _hit = sorted(s for s in missing_funcs
+                  if any(p.fullmatch(s) for p in _pats))
+    for s in _hit:
+        missing_funcs.discard(s)
+    if _hit:
+        print(f"[no-stub-regex] 排除 {len(_hit)} 个: {' '.join(_hit)}")
     for s in args.force_stub:
         missing_funcs.add(s)
     for item in args.force_stub_data:
