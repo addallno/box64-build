@@ -286,9 +286,6 @@ python3 $GITHUB_WORKSPACE/scripts/patch-musl-isnanf.py $WORK/box64 $WORK/include
 echo "==> 打 syscallwrap 补丁（sendmmsg/shm，静态程序 DNS 依赖）"
 python3 $GITHUB_WORKSPACE/scripts/patch_syscalls.py $WORK/box64
 
-echo "==> 打 div 诊断打点（[DIVT]，定位 divq hi!=0 不写根因，定位后移除）"
-python3 $GITHUB_WORKSPACE/scripts/patch_divtrace.py $WORK/box64
-
 echo "==> 生成 musl 缺失符号 stub（gen-libc-stubs.py）"
 MUSL_SYMS_OPT=""
 if [ -s "$MUSL_SYMS" ]; then
