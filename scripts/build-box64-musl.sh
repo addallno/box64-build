@@ -303,6 +303,9 @@ python3 $GITHUB_WORKSPACE/scripts/patch_clone_raw.py $WORK/box64
 echo "==> 打 P0 修复补丁（arm64_lock release/casal flags/epoll 越界与溢出）"
 python3 $GITHUB_WORKSPACE/scripts/patch_p0fixes.py $WORK/box64
 
+echo "==> 打 B5 补丁（cntfrq=0 校准兜底，保住硬件计数器）"
+python3 $GITHUB_WORKSPACE/scripts/patch_b5tsc.py $WORK/box64
+
 echo "==> 生成 musl 缺失符号 stub（gen-libc-stubs.py）"
 MUSL_SYMS_OPT=""
 if [ -s "$MUSL_SYMS" ]; then
