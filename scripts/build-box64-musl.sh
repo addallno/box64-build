@@ -385,7 +385,7 @@ cmake .. \
   -DCI=1 \
   -DCMAKE_C_COMPILER=$CROSS_CC \
   $CCACHE_OPT \
-  -DCMAKE_C_FLAGS="-D_GNU_SOURCE -D_DEFAULT_SOURCE -I$WORK/include -include $WORK/include/mmap64.h -Wno-implicit-function-declaration -fno-builtin $MUTEX_MACROS" \
+  -DCMAKE_C_FLAGS="-D_GNU_SOURCE -D_DEFAULT_SOURCE -I$WORK/include -include $WORK/include/mmap64.h -Wno-implicit-function-declaration -fno-builtin -march=armv8-a+crypto+crc -mtune=cortex-a53 -O3 $MUTEX_MACROS" \
   -DARM_DYNAREC=ON \
   -DBOX32=ON \
   -DSTATICBUILD=${STATICBUILD:-true} \
