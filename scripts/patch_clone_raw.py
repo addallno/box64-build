@@ -2,15 +2,14 @@
 """修复 clone 根因：musl clone() 包装层对含 CLONE_CHILD_CLEARTID|SETTLS|THREAD 的 flags
 直接返回 EINVAL（反汇编确认 libc.a clone() C 层 ccmp+b.eq 路径），导致 guest pthread_create
 全灭。改为直接调用底层 __clone（musl pthread 内部同路径，已实测无此检查），弱符号以兼容
-glibc 构建（glibc clone() 本身无此坑，回退原调用）。同时带 [CLONERAW] 诊断打点。
+glibc 构建（glibc clone() 本身无此坑，回退原调用）。验证后已移除诊断打点。
 
 用法: patch_clone_raw.py <box64源码目录>
-幂等: 检测 [CLONERAW] 标记已存在则跳过。
+幂等: 检测已注入的修复注释则跳过。
 """
 import sys
 import os
 
-MARK = "[CLONERAW]"
 
 # 锚点1: 声明插入位置（include 区）
 DECL_ANCHOR = "#include <sched.h>\n"
@@ -29,11 +28,10 @@ OLD1 = (
 NEW1 = (
     "                    flags&=~CLONE_SETTLS;   // to be handled differently\n"
     "                    int64_t ret;\n"
-    "                    if(__clone)  // 绕过 musl clone() 包装层的 EINVAL 检查 [CLONERAW]\n"
+    "                    if(__clone)  // 绕过 musl clone() 包装层的 EINVAL 检查\n"
     "                        ret = __clone(clone_fn_syscall, (void*)((uintptr_t)mystack+1024*1024), flags, args, R_RDX, NULL, R_R10);\n"
     "                    else\n"
     "                        ret = clone(clone_fn_syscall, (void*)((uintptr_t)mystack+1024*1024), flags, args, R_RDX, NULL, R_R10);\n"
-    "                    if(ret<0) fprintf(stderr, \"[CLONERAW] newstk ret=%ld errnolike=%ld flags=0x%lx rip=%llx\\n\", (long)ret, (long)-ret, (unsigned long)flags, (unsigned long long)R_RIP);\n"
     "                    S_RAX = ret;\n"
 )
 
@@ -46,11 +44,10 @@ OLD2 = (
 NEW2 = (
     "                flags &= ~CLONE_SETTLS;   // guest TLS is applied to the emulated FS base in clone_fn_syscall\n"
     "                long ret;\n"
-    "                if(__clone)  // 绕过 musl clone() 包装层的 EINVAL 检查 [CLONERAW]\n"
+    "                if(__clone)  // 绕过 musl clone() 包装层的 EINVAL 检查\n"
     "                    ret = __clone(clone_fn_syscall, (void*)((uintptr_t)mystack+1024*1024), flags, args, R_RCX, NULL, R_R8);\n"
     "                else\n"
     "                    ret = clone(clone_fn_syscall, (void*)((uintptr_t)mystack+1024*1024), flags, args, R_RCX, NULL, R_R8);\n"
-    "                if(ret<0) fprintf(stderr, \"[CLONERAW] my_syscall ret=%ld flags=0x%lx\\n\", ret, (unsigned long)flags);\n"
     "                return ret;\n"
 )
 
@@ -59,7 +56,7 @@ def patch(srcdir: str) -> int:
     path = os.path.join(srcdir, "src", "emu", "x64syscall.c")
     with open(path, "r", encoding="utf-8") as f:
         src = f.read()
-    if MARK in src:
+    if "__clone" in src and "绕过 musl clone()" in src:
         print(f"patch_clone_raw: 已应用过，跳过 ({path})")
         return 0
     n = 0
