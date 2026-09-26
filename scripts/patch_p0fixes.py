@@ -3,6 +3,9 @@
 
 1. arm64_lock.S arm64_atomic_storeifref_d：casal 不更新 NZCV，bne 排在 cmp 之前
    读到残留 flags → 返回值不可靠。交换 cmp/bne 顺序（对照 64 位正确版）。
+   附带 P0-3b：LSE storeifref 与 storeifref_d 失败路径返回期望值(x3/w3)而非
+   casal 实际 old → 调用者 (ret==ref) 误判成功；改返回 casal 结果(x2/w2)。
+   （注：远端 Cortex-A53 无 LSE 走非 LSE 路径不受影响，此为通用正确性修复）
 2. arm64_lock.S arm64_lock_storeb/store/store_dd：`str; dmb` 屏障在 store 之后，
    缺前向发布语义；读侧 GET_PROT 是 ldaxrb(acquire) 配对 → 改 release store
    （前导 dmb ish + stlrb/stlr，语义为原实现超集）。
@@ -84,6 +87,46 @@ JOBS = [
             "    cbnz    w3, 1b      // " + SENTINEL + ": stlxp 需配对 ldxp，失败重试\n"
             "    mov     w0, w3\n"
             "    dmb     ish\n"
+            "    ret\n",
+        ),
+        # 6. P0-3b: LSE storeifref_d 失败路径返回期望值 w3 而非 casal 实际值 w2
+        #    → 调用者 (ret==ref) 误判成功（非 LSE 版返回的是 ldaxr 实际 old）。
+        #    锚点含修复1后的 cmp/bne 文本，保证与非 LSE 版区分。
+        (
+            "    cmp     w2, w3      // " + SENTINEL + ": casal 不更新 flags，bne 必须在 cmp 后\n"
+            "    bne     2f\n"
+            "    mov     w0, w1\n"
+            "    ret\n"
+            "2:\n"
+            "    mov     w0, w3\n"
+            "    ret\n",
+            "    cmp     w2, w3      // " + SENTINEL + ": casal 不更新 flags，bne 必须在 cmp 后\n"
+            "    bne     2f\n"
+            "    mov     w0, w1\n"
+            "    ret\n"
+            "2:\n"
+            "    mov     w0, w2      // " + SENTINEL + ": 返回 casal 实际 old，勿用期望值 w3\n"
+            "    ret\n",
+        ),
+        # 7. P0-3b: LSE storeifref(64位) 同款失败路径返回 x3(期望) → 应返回 x2(实际 old)
+        (
+            "    mov     x3, x2\n"
+            "    casal   x2, x1, [x0]\n"
+            "    cmp     x2, x3\n"
+            "    bne     2f\n"
+            "    mov     x0, x1\n"
+            "    ret\n"
+            "2:\n"
+            "    mov     x0, x3\n"
+            "    ret\n",
+            "    mov     x3, x2\n"
+            "    casal   x2, x1, [x0]\n"
+            "    cmp     x2, x3\n"
+            "    bne     2f\n"
+            "    mov     x0, x1\n"
+            "    ret\n"
+            "2:\n"
+            "    mov     x0, x2      // " + SENTINEL + ": 返回 casal 实际 old，勿用期望值 x3\n"
             "    ret\n",
         ),
     ]),
