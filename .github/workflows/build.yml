@@ -15,13 +15,29 @@ on:
         description: '保留符号（不 strip，用于 gdb 崩溃定位）'
         type: boolean
         default: false
+  schedule:
+    # 批次3 #16：每周一构建 pin 基线（scripts/box64-pin.txt）+ main 对照，防上游漂移无声失败
+    - cron: '0 3 * * 1'
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: ${{ github.event_name == 'schedule' && 90 || 45 }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: 解析构建 ref/static（#16：schedule 用 pin，dispatch 用 inputs）
+        id: ref
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            PIN=$(grep -v '^#' scripts/box64-pin.txt 2>/dev/null | head -1 | tr -d '[:space:]' || true)
+            [ -n "$PIN" ] || PIN=main
+            echo "ref=$PIN" >> "$GITHUB_OUTPUT"
+            echo "static=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=${{ inputs.box64_ref }}" >> "$GITHUB_OUTPUT"
+            echo "static=${{ inputs.static }}" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: 缓存 musl 工具链 tarball
         uses: actions/cache@v4
@@ -33,7 +49,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /tmp/ccache
-          key: ccache-box64-${{ runner.os }}-${{ inputs.box64_ref }}
+          key: ccache-box64-${{ runner.os }}-${{ steps.ref.outputs.ref }}
           restore-keys: |
             ccache-box64-${{ runner.os }}-
 
@@ -42,8 +58,8 @@ jobs:
 
       - name: 交叉编译 box64 (aarch64 musl, BOX32 + DYNAREC)
         env:
-          BOX64_REF: ${{ inputs.box64_ref }}
-          STATICBUILD: ${{ inputs.static }}
+          BOX64_REF: ${{ steps.ref.outputs.ref }}
+          STATICBUILD: ${{ steps.ref.outputs.static }}
           DEBUG_KEEP_SYM: ${{ inputs.debug }}
           MUSL_CACHE_DIR: /tmp/musl-cross-cache
           CCACHE_DIR: /tmp/ccache
@@ -52,7 +68,7 @@ jobs:
       # 冒烟测试：qemu-user 模拟 aarch64 box64（强制解释器），再解释 x86 测试件。
       # 覆盖 B-10（128 位除法 stub）与 B-11（pthread clone）两类静默错误。
       - name: 冒烟测试 (qemu-user + 解释器)
-        if: ${{ inputs.static }}
+        if: ${{ steps.ref.outputs.static == 'true' }}
         run: |
           set -euo pipefail
           sudo apt-get install -y qemu-user-static
@@ -71,9 +87,40 @@ jobs:
       - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
-          name: box64-aarch64-musl-${{ inputs.box64_ref }}-${{ inputs.static && 'static' || 'dyn' }}${{ inputs.debug && '-sym' || '' }}
+          name: box64-aarch64-musl-${{ steps.ref.outputs.ref }}-${{ steps.ref.outputs.static == 'true' && 'static' || 'dyn' }}${{ inputs.debug && '-sym' || '' }}
           path: |
             /tmp/box64-aarch64-musl
             /tmp/box64-aarch64-musl.debug
           if-no-files-found: error
           retention-days: 30
+
+      # 批次3 #16：pin 构建通过后追加 main 对照构建（仅验证可构建，产物不上传）
+      - name: main 对照构建（仅 schedule，#16 漂移预警）
+        if: ${{ github.event_name == 'schedule' && steps.ref.outputs.ref != 'main' }}
+        env:
+          BOX64_REF: main
+          STATICBUILD: true
+          MUSL_CACHE_DIR: /tmp/musl-cross-cache
+          CCACHE_DIR: /tmp/ccache
+        run: bash scripts/build-box64-musl.sh
+
+      # 批次3 #16：失败时把 patch 链累计 diff/锚上下文写进 Step Summary
+      - name: 失败诊断写入 Step Summary
+        if: ${{ failure() }}
+        run: |
+          {
+            echo "### 构建失败诊断（批次3 #16）"
+            echo '```'
+            if [ -d /tmp/box64-build/box64 ]; then
+              echo '--- patch 后源码改动状态 ---'
+              git -C /tmp/box64-build/box64 status --short | head -30
+              echo '--- patch 链累计 diff（stat）---'
+              git -C /tmp/box64-build/box64 diff --stat | tail -30
+              echo '--- 最后 80 行 patch diff ---'
+              git -C /tmp/box64-build/box64 diff | tail -80
+            else
+              echo "box64 源目录不存在（失败在 checkout/下载源码之前）"
+            fi
+            echo '```'
+            echo "锚点未命中时，patch 脚本 stderr 打印命中数与锚串，详见各步骤完整日志。"
+          } >> "$GITHUB_STEP_SUMMARY"

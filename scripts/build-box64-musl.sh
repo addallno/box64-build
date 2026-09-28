@@ -312,6 +312,9 @@ python3 $GITHUB_WORKSPACE/scripts/patch_munmap_guard.py $WORK/box64
 echo "==> 打 maps 重读粒度补丁（库加载不再全量重读 /proc/self/maps，B2）"
 python3 $GITHUB_WORKSPACE/scripts/patch_b2maps.py $WORK/box64
 
+echo "==> 打版本 stamp 注入补丁（CMake git_head.h + banner，批次3 #15）"
+python3 $GITHUB_WORKSPACE/scripts/patch_stamp.py $WORK/box64
+
 echo "==> 生成 musl 缺失符号 stub（gen-libc-stubs.py）"
 MUSL_SYMS_OPT=""
 if [ -s "$MUSL_SYMS" ]; then
@@ -372,6 +375,13 @@ void backtrace_symbols_fd(void* const*, int, int);
 #endif
 #endif
 EOF
+
+# 批次3 #15：构建 stamp（ref@上游sha + static/box32 + patch 链 commit），make 时由
+# add_custom_command 写入 git_head.h，banner 拼接打印；env 未设置时展开为空
+BOX64_GIT=$(git -C "$WORK/box64" rev-parse --short HEAD 2>/dev/null || echo nogit)
+PATCH_SHA=$(git -C "${GITHUB_WORKSPACE:-.}" rev-parse --short HEAD 2>/dev/null || echo local)
+export BOX64_BUILD_STAMP=" ${BOX64_REF:-main}@${BOX64_GIT} static=${STATICBUILD:-true} box32=on patches=${PATCH_SHA}"
+echo "==> 构建 stamp:${BOX64_BUILD_STAMP}"
 
 echo "==> cmake 交叉编译"
 cd box64
