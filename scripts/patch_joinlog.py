@@ -88,6 +88,12 @@ JOBS = [
             "    return __ret;\n"
             "}",
         ),
+        # BAD_PKILL 在 musl 下编译修复：pthread_t 是指针、et->self 是整数，
+        # 三元混用触发 -Wint-conversion 错误 → 分支各自显式 cast void*
+        (
+            "add_thread((void*)(et?et->self:pthread_self()), et);",
+            "add_thread((void*)(et?(void*)et->self:(void*)pthread_self()), et);",
+        ),
     ]),
 ]
 
