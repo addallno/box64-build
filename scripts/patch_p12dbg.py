@@ -239,7 +239,7 @@ def main():
             "    { // BOX64-BUILD: p12dbg v7 抓拆洞凶手：全部内部 munmap 限流打印（凶手在启动3s内，前1000条必覆盖）\n"
             "        static int p12u = 0;\n"
             "        if((++p12u) <= 1000 || (p12u % 50) == 0)\n"
-            '            fprintf(stderr, "P12IUNMAP n=%d addr=%p len=%lu\\n", p12u, addr, length);\n'
+            '            fprintf(stderr, "P12IUNMAP n=%d addr=%p len=%lu caller=%p\\n", p12u, addr, length, __builtin_return_address(0));\n'
             "    }\n",
             "os_linux.c IUNMAP",
         )
