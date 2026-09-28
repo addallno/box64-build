@@ -2,7 +2,7 @@
 
 > 起始：v0.2.4 静态构建（A 组）→ main v0.4.5 静态 steamcmd 真机测试
 > 环境：远端 Android/Termux proot ubuntu-jammy_arm64，主产物 `~/box64-aarch64-musl`（main v0.4.5 静态）
-> 更新：2026-09-26
+> 更新：2026-09-28
 
 ## 一、v0.2.4 静态构建期 bug（已修复，ci-param 分支）
 
@@ -79,15 +79,14 @@ musl 静态运行时 `dlopen(NULL)/dlsym(任意 handle)` 全部返回 0（`Dynam
 - **修复**（b148589 `scripts/patch_clone_raw.py`）：case56 两处新栈分支改 `extern int __clone(...) __attribute__((weak))` 直调底层 `__clone`（musl pthread 同路径，无检查，返回 raw -errno 顺带修复假 EPERM；glibc 构建下弱符号回退原 `clone()`——glibc 包装无此坑）。
 - **验证**（CI 36237479586 → `~/box64cf`）：thrmin 解释器+dynarec 全 rc=0（串行/attr/并发10/释放重建）；mthrd `mutex_counter=160000 ok`、`payload=10000 ok`、barrier/sem ok、join 全 0；cloneprobe `r=8208 errno=0`。
 
-### B-12 dynarec 下 steamcmd 偶发卡死 `Loading Steam API...`（观察中 ⏳）
-- **症状**：dynarec 跑 steamcmd 约 50% 概率输出停在 `Loading Steam API...`（rc=124 timeout），无 [CLONERAW]、无登录判据；解释器（`BOX64_DYNAREC=0`）稳定完成登录。
-- **已排除**：clone 线程创建失败（B-11 修复后仍复现，卡死时无 clone 打点）；单开关效应——`BIGBLOCK=0/CALLRET=0/SAFEFLAGS=2/AVX=0` 各有成败、`BIGBLOCK=0` 连跑 2 次 1 过 1 卡、默认连跑 3 次全卡 → **非确定性开关 bug，属偶发竞态**（与 B-06 退出期 `could not immediately join` 同域嫌疑）。
-- **已知缓解**：重跑即通（概率性）；解释器模式必通但慢。
-- **现场采样（b12probe.sh，14 线程）**：主线程 `hrtimer_nanosleep` 轮询（syscall 101）；12 个 guest 线程全在 `futex_wait_queue_me`、2 个在 `SyS_epoll_wait`（IOCP Thread 0、IPC:CSteamEngin）→ 所有 worker 均休眠、无忙等，**主线程在等一个永不到达的条件（工作项/唤醒丢失形态）**，非死循环。
-- **已排除（subagent 审查后定向实验）**：P0-1 内存序——`BOX64_DYNAREC_STRONGMEM=1` 对照 6 轮 4 卡（与基线 ~50-60% 无差异）；P0-4 epoll_pwait2 超时溢出——修复后累计 12 轮 8 卡 4 GOT_CONFIG、0 LOGIN_OK（与基线相当，guest 不走该路径）。
-- ~~**嫌疑收窄：dynablock.c:447 need_lock=0 无锁路径**~~ **已排除（2026-09-26 源码核对）**：`need_lock=0` 是**持锁重入设计**——`DBGetBlock` 在 `mutex_lock` 持有状态下调 `internalDBGetBlock(...,need_lock=0,...)` 防自死锁（dynablock.c:516/537），非无锁竞态。
-- **新主嫌疑（读侧内存序）**：`getDB`（custommem.c:2146-2200）多级跳转表 `box64_jmptbl3[i3][i2][i1][i0]` + `*(dynablock_t**)(ret-8)` 读取**全为普通 load、无 acquire 屏障**；写侧发布链 FillBlock64 写 code/db 指针 → `addJumpTableIfDefault64`/`native_lock_storeifref2`（CAS release）。ARM 弱序下读侧可能见到半发布条目 → 执行流跳坏 → 偶发卡死。dynarec-only ✓（解释器不用 jmptbl）✓ STRONGMEM 不覆盖（非 LOCK 前缀路径）。待核对 getDBBlock/getJumpAddress64 读侧调用点后决定是否 patch。
-- **下一步**：核对读侧 acquire 缺失点写 patch；2 个 epoll 线程行为深入（wchan 无法区分正常等事件与永久阻塞）。
+### B-12 dynarec 下 steamcmd 偶发卡死 `Loading Steam API...`（已修复 ✅ 2026-09-28）
+- **症状**：dynarec 跑 steamcmd ~68% 概率停在 `Loading Steam API...`（历史 32 轮 22 卡 7 GOT 0 LOGIN——dynarec 下从未登录成功）；解释器稳定完成。
+- **排查历程**（大量实验，多路排除）：B-11 复测仍卡；dynarec 开关（BIGBLOCK/CALLRET/SAFEFLAGS/AVX/STRONGMEM=1）均无效；b12probe 现场=worker 全休眠主线程 nanosleep/futex 永等；P0-4 修复无效；FillBlock trunc/cancel 与 STUCK 12/12 完美相关；p12dbg 打点系列（v1-v10：P12ENTER/FUTEX/CREATE/POST/WAIT/EMPTY/INTERP/REALLOC/CTX/IUNMAP/FIXMAP/UNMAP/REMAP/caller）逐层定位；排除：guest munmap 表象(P12UNMAP=0)、MAP_FIXED(全 0x3f 区)、mremap(REMAP=0)、box_munmap 内部调用点、strace（proot/观察者效应）、need_lock=0 持锁重入设计。
+- **根因链（行级时序铁证，q49b/q51）**：`① guest munmap 12KB 释放自区 → ② 内核把其中 8KB 给 musl realloc，p_blocks 数组迁入（行207 REALLOC new=0x…8b0 c=136）→ ③ guest 二次 munmap 重叠旧区 8KB（行273 IUNMAP n=299/300——POSIX 应 no-op）→ ④ box64 EXPORT munmap(custommmap.c:50) 无校验直接 InternalMunmap 真拆（native trampoline 直达，绕过 my_munmap 的 mapping 同步）→ ⑤ p_blocks[1] 所在页被拆 → FillBlock 遍历 SEGV（addr=+0x28 恒 idx1，100% 复现，addr2line=map64_customMalloc/internal_customMalloc）→ ⑥ cancelFillBlock→空块→主线程 sem_wait 永等`。
+- **修复**：`scripts/patch_munmap_guard.py`（哨兵 BOX64-BUILD: munmap-guard，挂链 patch_jmptbl_acquire 后）——custommem.c 加 `box_guest_mapping_flag()`（mapallmem 标记判定：UNUSED/RESERVED/BOX=拒拆，其他=允许，mapallmem 未启用保持原行为）+ custommmap.c EXPORT munmap 入口守卫（拒拆打 `P12GUARD skip` 日志返回0）。
+- **验证（14/14 全绿）**：修复后 q52 4/4 LOGIN + q53 10/10 LOGIN，**trig=0、CREATE=16-19 正常线程池、GUARD 拦截 ~1100/轮（无标记 munmap no-op）**。历史从未 dynarec LOGIN 成功 → 彻底解决。产物 md5=e57c837470a5c1f0e248afbe4548a7ce（CI 36411403972，含 munmap_guard+p12dbg 打点）。
+- **残余观察项**：GUARD 拦截量大（~1100/轮，多为 4KB guest 无标记 munmap no-op→VA 泄漏风险，14 轮无功能异常）；p12dbg 打点已摘除定版（本 commit）。
+- **方法论副产物**：printf_log 全走 stderr——steamcmd freopen64 后 box64 日志转 `/root/Steam/logs/stderr.txt`（此前多次"打点=0"是看错文件）；/root 仅 proot 内可见；外层路径用 `~`；生成 .sh 必须用 write 工具（fish 破坏 heredoc）。
 
 ### 批次1 修复清单（subagent 三报告落地，CI run 36247763029，已远端验证无回归）
 - **P0-2** `arm64_lock.S` storeb/store/store_dd 屏障在 store 后 → 改 release store（`dmb ish; stlr*`）。

@@ -308,8 +308,6 @@ python3 $GITHUB_WORKSPACE/scripts/patch_b5tsc.py $WORK/box64
 python3 $GITHUB_WORKSPACE/scripts/patch_jmptbl_acquire.py $WORK/box64
 echo "==> 打 munmap 守卫补丁（EXPORT munmap 按 mapallmem 标记拒拆内部页，B-12 修复）"
 python3 $GITHUB_WORKSPACE/scripts/patch_munmap_guard.py $WORK/box64
-# BOX64-BUILD: p12dbg 临时打点（futex/clone 全踪，B-12 waker 定位）——结论得出后移除本行
-python3 $GITHUB_WORKSPACE/scripts/patch_p12dbg.py $WORK/box64
 
 echo "==> 生成 musl 缺失符号 stub（gen-libc-stubs.py）"
 MUSL_SYMS_OPT=""
