@@ -94,6 +94,11 @@ def main():
             "    int log = 0;\n"
         )
         s0 = sub1(s0, anchor, anchor +
+            "    {\n"
+            "        static int p12n = 0; // BOX64-BUILD: p12dbg ENTER 计数探针\n"
+            '        if((++p12n) <= 8 || (p12n % 500) == 0)\n'
+            '            printf_log(LOG_INFO, "P12ENTER tid=%d s=%d n=%d\\n", GetTID(), s, p12n);\n'
+            "    }\n"
             "    if(s == 202 || s == 56 || s == 435) { // BOX64-BUILD: p12dbg v1 合并\n"
             "        if(s == 202)\n"
             '            printf_log(LOG_INFO, "P12FUTEX tid=%d addr=%p op=%u arg=%d\\n",\n'
