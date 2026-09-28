@@ -83,6 +83,31 @@ def main():
     else:
         print("[patch_p12dbg] threads.c 已应用过，跳过")
 
+    # ---- static_threads.h：my_sem_* 原型（GOM 的 &my_##N 需要可见声明）----
+    st = os.path.join(root, "src", "libtools", "static_threads.h")
+    if not os.path.isfile(st):
+        fail(f"文件不存在: {st}")
+    s = open(st, encoding="utf-8").read()
+    if "int my_sem_post(x64emu_t* emu, sem_t* s);" not in s:
+        s = sub1(
+            s,
+            "#include <pthread.h>\n",
+            "#include <pthread.h>\n#include <semaphore.h> // BOX64-BUILD: p12dbg\n",
+            "static_threads.h include",
+        )
+        s = sub1(
+            s,
+            "int my_pthread_create(x64emu_t *emu, void* t, void* attr, void* start_routine, void* arg);",
+            "int my_sem_post(x64emu_t* emu, sem_t* s); // BOX64-BUILD: p12dbg\n"
+            "int my_sem_wait(x64emu_t* emu, sem_t* s); // BOX64-BUILD: p12dbg\n"
+            "int my_pthread_create(x64emu_t *emu, void* t, void* attr, void* start_routine, void* arg);",
+            "static_threads.h 原型",
+        )
+        open(st, "w", encoding="utf-8").write(s)
+        print("[patch_p12dbg] static_threads.h: 原型注入完成")
+    else:
+        print("[patch_p12dbg] static_threads.h 已应用过，跳过")
+
     # ---- private.h：GO -> GOM ----
     ph = os.path.join(root, "src", "wrapped", "wrappedlibpthread_private.h")
     if not os.path.isfile(ph):
