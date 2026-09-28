@@ -282,6 +282,30 @@ def main():
         print("[patch_p12dbg] wrappedlibc.c: P12UNMAP 注入完成")
     else:
         print("[patch_p12dbg] wrappedlibc.c 已应用过，跳过")
+    # v8: my_mremap 打点（内核 mremap 缩小/MAYMOVE 自行 unmap，绕过所有 munmap 打点——拆洞头号嫌疑）
+    s = open(wl, encoding="utf-8").read()
+    if "P12REMAP" not in s:
+        anchor_mr = (
+            "EXPORT void* my_mremap(x64emu_t* emu, void* old_addr, size_t old_size, size_t new_size, int flags, void* new_addr)\n"
+            "{\n"
+            "    #ifdef DYNAREC\n"
+            "    last_mmap_0_addr = NULL;\n"
+            "    last_mmap_0_len = 0;\n"
+            "    #endif\n"
+            "    (void)emu;\n"
+            "    lockMmapMutex();\n"
+        )
+        s = sub1(
+            s,
+            anchor_mr,
+            anchor_mr +
+            '    printf_log(LOG_INFO, "P12REMAP old=%p osz=%zu nsz=%zu fl=%d new=%p\\n", old_addr, old_size, new_size, flags, new_addr); // BOX64-BUILD: p12dbg v8\n',
+            "wrappedlibc.c REMAP",
+        )
+        open(wl, "w", encoding="utf-8").write(s)
+        print("[patch_p12dbg] wrappedlibc.c: P12REMAP 注入完成")
+    else:
+        print("[patch_p12dbg] wrappedlibc.c P12REMAP 已应用过，跳过")
     return 0
 
 
