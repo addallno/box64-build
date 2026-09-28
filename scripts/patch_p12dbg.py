@@ -51,7 +51,7 @@ def main():
             "EXPORT int my_pthread_create(x64emu_t *emu, void* t, void* attr, void* start_routine, void* arg)\n{\n",
             "EXPORT int my_pthread_create(x64emu_t *emu, void* t, void* attr, void* start_routine, void* arg)\n"
             "{\n"
-            '\tprintf_log(LOG_NONE, "P12CREATE tid=%d start=%p arg=%p\\n", GetTID(), start_routine, arg); // BOX64-BUILD: p12dbg\n',
+            '\tprintf_log(LOG_INFO, "P12CREATE tid=%d start=%p arg=%p\\n", GetTID(), start_routine, arg); // BOX64-BUILD: p12dbg\n',
             "threads.c create打印",
         )
         # 3) my_sem_post / my_sem_wait 实现（插在 my_pthread_create 之前）
@@ -60,13 +60,13 @@ def main():
             "EXPORT int my_sem_post(x64emu_t* emu, sem_t* s)\n"
             "{\n"
             '\t(void)emu;\n'
-            '\tprintf_log(LOG_NONE, "P12POST tid=%d sem=%p\\n", GetTID(), (void*)s);\n'
+            '\tprintf_log(LOG_INFO, "P12POST tid=%d sem=%p\\n", GetTID(), (void*)s);\n'
             "\treturn sem_post(s);\n"
             "}\n"
             "EXPORT int my_sem_wait(x64emu_t* emu, sem_t* s)\n"
             "{\n"
             '\t(void)emu;\n'
-            '\tprintf_log(LOG_NONE, "P12WAIT tid=%d sem=%p\\n", GetTID(), (void*)s);\n'
+            '\tprintf_log(LOG_INFO, "P12WAIT tid=%d sem=%p\\n", GetTID(), (void*)s);\n'
             "\treturn sem_wait(s);\n"
             "}\n"
             "\n"
@@ -82,6 +82,31 @@ def main():
         print("[patch_p12dbg] threads.c: 3 处注入完成")
     else:
         print("[patch_p12dbg] threads.c 已应用过，跳过")
+
+    # ---- x64syscall.c：futex/clone 直发路径打点（v1 合并回来）----
+    xs = os.path.join(root, "src", "emu", "x64syscall.c")
+    if not os.path.isfile(xs):
+        fail(f"文件不存在: {xs}")
+    s0 = open(xs, encoding="utf-8").read()
+    if SENTINEL not in s0:
+        anchor = (
+            "    uint32_t s = R_EAX; // EAX? (syscalls only go up to 547 anyways)\n"
+            "    int log = 0;\n"
+        )
+        s0 = sub1(s0, anchor, anchor +
+            "    if(s == 202 || s == 56 || s == 435) { // BOX64-BUILD: p12dbg v1 合并\n"
+            "        if(s == 202)\n"
+            '            printf_log(LOG_INFO, "P12FUTEX tid=%d addr=%p op=%u arg=%d\\n",\n'
+            "                GetTID(), (void*)R_RDI, (unsigned)R_RSI, (int)R_RDX);\n"
+            "        else\n"
+            '            printf_log(LOG_INFO, "P12CLONE tid=%d s=%d flag=%u\\n",\n'
+            "                GetTID(), s, (unsigned)R_RDI);\n"
+            "    }\n",
+            "x64syscall.c 打点")
+        open(xs, "w", encoding="utf-8").write(s0)
+        print("[patch_p12dbg] x64syscall.c: v1 打点注入完成")
+    else:
+        print("[patch_p12dbg] x64syscall.c 已应用过，跳过")
 
     # ---- static_threads.h：my_sem_* 原型（GOM 的 &my_##N 需要可见声明）----
     st = os.path.join(root, "src", "libtools", "static_threads.h")
