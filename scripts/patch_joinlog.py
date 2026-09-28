@@ -8,8 +8,10 @@ join 即 PLT pthread_join（失败/超时重试），故需要在 box64 侧记�
 join 错误码（EINVAL=detached / ESRCH=无效线程等）以定位根因。
 
 改动：
-1. wrappedlibpthread_private.h: GO(pthread_join) -> GOM（挂接 my_pthread_join）
-2. threads.c: 在 my_pthread_create 之后插入 my_pthread_join，
+1. wrappedlibpthread_private.h: GO(pthread_join) -> GOM（挂接 my_pthread_join，
+   签名用已生成的 iFEpp，pthread_t 与 void* 同宽直接转换，避免新增类型 token）
+2. static_threads.h: 声明 my_pthread_join（wrappedlibpthread.c 可见）
+3. threads.c: 在 my_pthread_create 之后插入 my_pthread_join，
    失败时 printf_log(LOG_INFO) 打印 thread 指针与 strerror。
 
 用法: patch_joinlog.py <box64源码目录>
@@ -31,7 +33,14 @@ JOBS = [
     ("src/wrapped/wrappedlibpthread_private.h", [
         (
             "GO(pthread_join, iFLp)\n",
-            "GOM(pthread_join, iFELp)\n",
+            "GOM(pthread_join, iFEpp)\n",
+        ),
+    ]),
+    ("src/libtools/static_threads.h", [
+        (
+            "int my_pthread_create(x64emu_t *emu, void* t, void* attr, void* start_routine, void* arg);\n",
+            "int my_pthread_create(x64emu_t *emu, void* t, void* attr, void* start_routine, void* arg);\n"
+            "int my_pthread_join(x64emu_t* emu, void* thread, void** retval);\n",
         ),
     ]),
     ("src/libtools/threads.c", [
@@ -46,13 +55,13 @@ JOBS = [
             "}\n"
             "\n"
             "// " + SENTINEL + ": 诊断插桩，记录 guest pthread_join 失败错误码\n"
-            "EXPORT int my_pthread_join(x64emu_t* emu, pthread_t thread, void** retval)\n"
+            "EXPORT int my_pthread_join(x64emu_t* emu, void* thread, void** retval)\n"
             "{\n"
             "\t(void)emu;\n"
-            "\tint ret = pthread_join(thread, retval);\n"
+            "\tint ret = pthread_join((pthread_t)thread, retval);\n"
             "\tif(ret)\n"
             "\t\tprintf_log(LOG_INFO, \"my_pthread_join(%p) failed, ret=%d (%s)\\n\",\n"
-            "\t\t\t(void*)thread, ret, strerror(ret));\n"
+            "\t\t\tthread, ret, strerror(ret));\n"
             "\treturn ret;\n"
             "}\n",
         ),
