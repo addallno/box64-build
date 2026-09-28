@@ -86,6 +86,11 @@ musl 静态运行时 `dlopen(NULL)/dlsym(任意 handle)` 全部返回 0（`Dynam
 - **修复**：`scripts/patch_munmap_guard.py`（哨兵 BOX64-BUILD: munmap-guard，挂链 patch_jmptbl_acquire 后）——custommem.c 加 `box_guest_mapping_flag()`（mapallmem 标记判定：UNUSED/RESERVED/BOX=拒拆，其他=允许，mapallmem 未启用保持原行为）+ custommmap.c EXPORT munmap 入口守卫（拒拆打 `P12GUARD skip` 日志返回0）。
 - **验证（14/14 全绿）**：修复后 q52 4/4 LOGIN + q53 10/10 LOGIN，**trig=0、CREATE=16-19 正常线程池、GUARD 拦截 ~1100/轮（无标记 munmap no-op）**。历史从未 dynarec LOGIN 成功 → 彻底解决。产物 md5=e57c837470a5c1f0e248afbe4548a7ce（CI 36411403972，含 munmap_guard+p12dbg 打点）。
 - **残余观察项**：GUARD 拦截量大（~1100/轮，多为 4KB guest 无标记 munmap no-op→VA 泄漏风险，14 轮无功能异常）；p12dbg 打点已摘除定版（本 commit）。
+- **定版回归 ✓（2026-09-28，产物 md5=8c836c7095debc0b31a52b1e2c304863，CI 36427695373）**：
+  - steamcmd q54 十轮：**10/10 LOGIN**（累计修复后 24/24 全 LOGIN）；
+  - 功能件 qr 两轮：thrmin rc=0、mthrd rc=0（mutex=160000 ok/payload=10000 ok/barrier ok/join 全 0）、x509test rc=0、tlsx86 TLS_OK(TLSv1.3)、bntest2 mod_word=755908 DONE——**全绿**；
+  - 首轮 qr 中 mthrd 出现一次 rc=132(SIGILL)：四版对照（final/v11dbg/v10无mg/box64cf）单跑均 rc=0、复跑 qr 亦 rc=0 → 判定为 q54 刚结束时的资源竞争偶发，非回归；
+  - 远端版本链：box64-patched=定版、box64-patched.v11dbg=带打点旧版（留档）、box64-nomg=v10 无 mg 对照。
 - **方法论副产物**：printf_log 全走 stderr——steamcmd freopen64 后 box64 日志转 `/root/Steam/logs/stderr.txt`（此前多次"打点=0"是看错文件）；/root 仅 proot 内可见；外层路径用 `~`；生成 .sh 必须用 write 工具（fish 破坏 heredoc）。
 
 ### 批次1 修复清单（subagent 三报告落地，CI run 36247763029，已远端验证无回归）
