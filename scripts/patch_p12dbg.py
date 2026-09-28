@@ -215,6 +215,73 @@ def main():
         print("[patch_p12dbg] dynarec.c: P12INTERP 注入完成")
     else:
         print("[patch_p12dbg] dynarec.c 已应用过，跳过")
+
+    # ---- os_linux.c：InternalMunmap/InternalMmap 打点（v7：抓拆洞凶手）----
+    ol = os.path.join(root, "src", "os", "os_linux.c")
+    if not os.path.isfile(ol):
+        fail(f"文件不存在: {ol}")
+    s = open(ol, encoding="utf-8").read()
+    if SENTINEL not in s:
+        s = sub1(
+            s,
+            "#define _GNU_SOURCE\n#include <sys/syscall.h>\n",
+            "#define _GNU_SOURCE\n#include <sys/syscall.h>\n#include <stdio.h> // BOX64-BUILD: p12dbg v7\n",
+            "os_linux.c include",
+        )
+        anchor_mun = (
+            "int InternalMunmap(void* addr, unsigned long length)\n"
+            "{\n"
+        )
+        s = sub1(
+            s,
+            anchor_mun,
+            anchor_mun +
+            "    { // BOX64-BUILD: p12dbg v7 抓拆洞凶手：全部内部 munmap 限流打印（凶手在启动3s内，前1000条必覆盖）\n"
+            "        static int p12u = 0;\n"
+            "        if((++p12u) <= 1000 || (p12u % 50) == 0)\n"
+            '            fprintf(stderr, "P12IUNMAP n=%d addr=%p len=%lu\\n", p12u, addr, length);\n'
+            "    }\n",
+            "os_linux.c IUNMAP",
+        )
+        anchor_mm = (
+            "void* InternalMmap(void* addr, unsigned long length, int prot, int flags, int fd, ssize_t offset)\n"
+            "{\n"
+        )
+        s = sub1(
+            s,
+            anchor_mm,
+            anchor_mm +
+            "    if(flags & MAP_FIXED) // BOX64-BUILD: p12dbg v7 MAP_FIXED 原子替换目标区（不经 munmap）\n"
+            '        fprintf(stderr, "P12FIXMAP addr=%p len=%lu\\n", addr, length);\n',
+            "os_linux.c FIXMAP",
+        )
+        open(ol, "w", encoding="utf-8").write(s)
+        print("[patch_p12dbg] os_linux.c: IUNMAP+FIXMAP 注入完成")
+    else:
+        print("[patch_p12dbg] os_linux.c 已应用过，跳过")
+
+    # ---- wrappedlibc.c：my_munmap guest 侧打印（v7）----
+    wl = os.path.join(root, "src", "wrapped", "wrappedlibc.c")
+    if not os.path.isfile(wl):
+        fail(f"文件不存在: {wl}")
+    s = open(wl, encoding="utf-8").read()
+    if SENTINEL not in s:
+        anchor_my = (
+            "EXPORT int my_munmap(x64emu_t* emu, void* addr, size_t length)\n"
+            "{\n"
+            "    (void)emu;\n"
+        )
+        s = sub1(
+            s,
+            anchor_my,
+            anchor_my +
+            '    printf_log(LOG_INFO, "P12UNMAP addr=%p len=%zu\\n", addr, length); // BOX64-BUILD: p12dbg v7\n',
+            "wrappedlibc.c UNMAP",
+        )
+        open(wl, "w", encoding="utf-8").write(s)
+        print("[patch_p12dbg] wrappedlibc.c: P12UNMAP 注入完成")
+    else:
+        print("[patch_p12dbg] wrappedlibc.c 已应用过，跳过")
     return 0
 
 
