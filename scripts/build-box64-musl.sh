@@ -306,6 +306,8 @@ python3 $GITHUB_WORKSPACE/scripts/patch_p0fixes.py $WORK/box64
 echo "==> 打 B5 补丁（cntfrq=0 校准兜底，保住硬件计数器）"
 python3 $GITHUB_WORKSPACE/scripts/patch_b5tsc.py $WORK/box64
 python3 $GITHUB_WORKSPACE/scripts/patch_jmptbl_acquire.py $WORK/box64
+# BOX64-BUILD: p12dbg 临时打点（futex/clone 全踪，B-12 waker 定位）——结论得出后移除本行
+python3 $GITHUB_WORKSPACE/scripts/patch_p12dbg.py $WORK/box64
 
 echo "==> 生成 musl 缺失符号 stub（gen-libc-stubs.py）"
 MUSL_SYMS_OPT=""
