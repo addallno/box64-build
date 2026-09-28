@@ -12,7 +12,9 @@ join 错误码（EINVAL=detached / ESRCH=无效线程等）以定位根因。
    签名用已生成的 iFEpp，pthread_t 与 void* 同宽直接转换，避免新增类型 token）
 2. static_threads.h: 声明 my_pthread_join（wrappedlibpthread.c 可见）
 3. threads.c: 在 my_pthread_create 之后插入 my_pthread_join，
-   失败时 printf_log(LOG_INFO) 打印 thread 指针与 strerror。
+   成败都 printf_log(LOG_INFO)（joinlog2：确认 steam 是否真的没调 join）。
+4. threads.c: my_pthread_kill / my_pthread_kill_old 对 sig==0（存活探测）
+   打返回值（限流前100条+每500条1条），确认 ESRCH/0 分布。
 
 用法: patch_joinlog.py <box64源码目录>
 幂等: 检测哨兵 BOX64-BUILD: joinlog 则跳过。
@@ -54,16 +56,37 @@ JOBS = [
             "\t// no need too unalign for attr, it's const\n"
             "}\n"
             "\n"
-            "// " + SENTINEL + ": 诊断插桩，记录 guest pthread_join 失败错误码\n"
+            "// " + SENTINEL + ": 诊断插桩，记录 guest pthread_join 结果（成败都记）\n"
             "EXPORT int my_pthread_join(x64emu_t* emu, void* thread, void** retval)\n"
             "{\n"
             "\t(void)emu;\n"
             "\tint ret = pthread_join((pthread_t)thread, retval);\n"
-            "\tif(ret)\n"
-            "\t\tprintf_log(LOG_INFO, \"my_pthread_join(%p) failed, ret=%d (%s)\\n\",\n"
-            "\t\t\tthread, ret, strerror(ret));\n"
+            "\tprintf_log(LOG_INFO, \"my_pthread_join(%p) ret=%d (%s)\\n\",\n"
+            "\t\tthread, ret, ret?strerror(ret):\"ok\");\n"
             "\treturn ret;\n"
             "}\n",
+        ),
+        # my_pthread_kill：sig==0 探测返回值（限流：前100条+每500条1条）
+        (
+            "\treturn pthread_kill((pthread_t)thread, sig);\n"
+            "}\n",
+            "\tint __ret = pthread_kill((pthread_t)thread, sig);\n"
+            "\tstatic int __pkc = 0; // " + SENTINEL + " kill日志\n"
+            "\tif(sig == 0 && (__pkc++ < 100 || (__pkc % 500) == 0))\n"
+            "\t\tprintf_log(LOG_INFO, \"my_pthread_kill(%p, 0)=%d\\n\", thread, __ret);\n"
+            "\treturn __ret;\n"
+            "}\n",
+        ),
+        # my_pthread_kill_old（@GLIBC_2.2.5 版本符号路径）
+        (
+            "    return real_phtread_kill_old((pthread_t)thread, sig);\n"
+            "}",
+            "    int __ret = real_phtread_kill_old((pthread_t)thread, sig);\n"
+            "    static int __pko = 0; // " + SENTINEL + " kill_old日志\n"
+            "    if(sig == 0 && (__pko++ < 100 || (__pko % 500) == 0))\n"
+            "        printf_log(LOG_INFO, \"my_pthread_kill_old(%p, 0)=%d\\n\", thread, __ret);\n"
+            "    return __ret;\n"
+            "}",
         ),
     ]),
 ]
