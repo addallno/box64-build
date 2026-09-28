@@ -72,7 +72,9 @@ def main():
         "    int ret = InternalMunmap(addr, length);\n"
     )
     repl_c = (
-        "// BOX64-BUILD: munmap-guard 拒拆 box64 内部/无标记页（B-12：guest munmap 拆 p_blocks）\n"
+        "EXPORT int munmap(void* addr, unsigned long length)\n"
+        "{\n"
+        "    // BOX64-BUILD: munmap-guard 拆前校验标记，拒拆 box64 内部/无标记页（B-12：guest munmap 拆 p_blocks）\n"
         "    if(!box_guest_mapping_flag((uintptr_t)addr)) {\n"
         "        fprintf(stderr, \"P12GUARD skip munmap %p len=%lu\\n\", addr, length);\n"
         "        return 0;\n"
