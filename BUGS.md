@@ -93,6 +93,16 @@ musl 静态运行时 `dlopen(NULL)/dlsym(任意 handle)` 全部返回 0（`Dynam
   - 远端版本链：box64-patched=定版、box64-patched.v11dbg=带打点旧版（留档）、box64-nomg=v10 无 mg 对照。
 - **方法论副产物**：printf_log 全走 stderr——steamcmd freopen64 后 box64 日志转 `/root/Steam/logs/stderr.txt`（此前多次"打点=0"是看错文件）；/root 仅 proot 内可见；外层路径用 `~`；生成 .sh 必须用 write 工具（fish 破坏 heredoc）。
 
+### B-13 `Unloading Steam API` 阶段无限重试 join 永不退出（已修复 ✅ 2026-09-29）
+- **现象**：登录成功（`Waiting for user info...OK`）后主线程卡在 nanosleep 5ms 轮询，无限打印 `Work thread 'CJobMgr::m_WorkThreadPool:N' is marked exited, but we could not immediately join prior to deleting`，timeout 65-90s 才被杀（rc=124）；老版与解释器模式同样卡（非 dynarec 回归）。
+- **根因链**（steamclient.so 反汇编 0x270d090 timed join 破译 + pk.c 双端实证）：steam 用 `pthread_kill(t,0)` 探测线程死活——返回 0（活）→ 5ms sleep 重试永不 join；返回非 0 → `pthread_join` → 成功则退出循环。**musl 与 glibc（含原生 aarch64 glibc 2.35 实测）对已退出未 join 的 joinable 线程 `pthread_kill(t,0)` 都返回 0**，steam 永远等不到 ESRCH → 无限循环。box64 自身查询 `get_thread()` 线程表是准确的，只是没被用上。
+- **修复（3 commit）**：① `5ab0f27` 诊断插桩（`patch_joinlog.py`：my_pthread_join 无条件日志 + my_pthread_kill/kill_old 对 sig==0 限流日志，stderr 实证 `my_pthread_kill_old(...,0)=0` 循环）；② `5c607b9` build 脚本 cmake 加 `-DBAD_PKILL=ON`（box64 现成机制：sig==0 且非自身 → 查 threads_alive 表，已死给 ESRCH；仅 loongarch 默认开）——CI 失败：musl pthread_t=指针 vs et->self=uintptr_t 三元混用 `-Wint-conversion`（threads.c:312）；③ `7e72eab` patch_joinlog.py 补 cast 锚点 `add_thread((void*)(et?(void*)et->self:(void*)pthread_self()), et)` → CI 36463238866 成功。
+- **验证 ✓**：q56 单轮+3 轮附加全部 **rc=0 自然退出**（此前必 rc=124），`Unloading Steam API...OK`，stderr 见 12+ 条 `my_pthread_join(...) ret=0 (ok)`（steam 正常 join 全部工作线程，`failed to shut down`=0）；qr 五项全绿；q53 十轮 **9/10 LOGIN**（r9=登录期网络超时偶发，未到 Unloading，单轮复跑 rc=0 绿）。产物 md5=cdfa5cc13e49b5497e70f60bb898387b（stamp patches=7e72eab main@e1eee08）。
+- **附带记录**：诊断插桩（join/kill 日志，量小）保留在正式构建；q53 首轮紧跟 4 轮 steam 后 qr 曾 thrmin/mthrd 双 139（SIGSEGV），单独重跑即绿 → 环境偶发非确定性回归；`echo $?` 接管道拿的是末端命令 rc，qr.sh 用 `${PIPESTATUS[0]}`。
+
+### 批次3b 修复清单（steam Unloading 卡死，5ab0f27/5c607b9/7e72eab，CI 36463238866，q56 rc=0 / q53 9/10）
+- 见 B-13 详述：BAD_PKILL 开启 + musl cast 修复 + joinlog 诊断插桩（`scripts/patch_joinlog.py` 挂 patch 链 stamp 后）。
+
 ### 批次1 修复清单（subagent 三报告落地，CI run 36247763029，已远端验证无回归）
 - **P0-2** `arm64_lock.S` storeb/store/store_dd 屏障在 store 后 → 改 release store（`dmb ish; stlr*`）。
 - **P0-3** `arm64_atomic_storeifref_d` casal 后缺 `cmp` 就 `bne`（NZCV 残留）→ 补 cmp 再 bne。
