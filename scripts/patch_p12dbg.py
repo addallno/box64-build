@@ -28,11 +28,9 @@ def main():
         print("[patch_p12dbg] 已应用过，跳过")
         return 0
 
-    # 锚：x64Syscall_linux 中 s 解析后的固定开头（全文件唯一——32bit 版函数名不同）
+    # 锚：x64Syscall_linux 内 s/log 开头两行（全文件唯一；
+    # 不能含 RESET_FLAGS 行——isnanf 的 restore-lin 会插在其后断锚）
     anchor = (
-        "void EXPORT x64Syscall_linux(x64emu_t *emu)\n"
-        "{\n"
-        "    RESET_FLAGS(emu);\n"
         "    uint32_t s = R_EAX; // EAX? (syscalls only go up to 547 anyways)\n"
         "    int log = 0;\n"
     )
