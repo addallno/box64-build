@@ -106,12 +106,13 @@ musl 静态运行时 `dlopen(NULL)/dlsym(任意 handle)` 全部返回 0（`Dynam
 - **GCC14 兼容**：gen-libc-stubs `.c` 模板 include `<math.h>`（lgamma 隐式声明由 warning 升 error）。
 - **远端验证**：thrmin/mthrd/x509test(cmcert.pem 参数)/tlsx86/bntest2 全绿；steamcmd 12 轮 8 卡 4 GOT（无回归、无改善）。
 
-### 批次2 修复清单（A1/A2/B5/B6 + P0-3b，CI 36250467200 / 36251816378，已远端验证全绿）
+### 批次2 修复清单（A1/A2/B5/B6 + P0-3b + B2，CI 36250467200 / 36251816378 / 36434607216，已远端验证全绿；B1 暂缓）
 - **A1+A2（7825c6d）**：build 脚本 `-DCMAKE_C_FLAGS` 追加 `-march=armv8-a+crypto+crc -mtune=cortex-a53 -O3`（目标机 8×Cortex-A53 无 dotprod/fp16/atomics/rcpc，禁 armv8.2-a 系防 SIGILL）。产物 10,293,696B（-O3 后体积增大属预期）。
 - **B5（7f2fe8c，`patch_b5tsc.py`）**：ARM64 `readFreq` 纯 `mrs cntfrq_el0` 读 0 无兜底 → freq<1MHz 走 box64_rdtsc=1 每次 rdtsc 用 CLOCK_MONOTONIC_COARSE（ms 粒度）。patch 加 cntfrq==0 时 cntvct+50ms 校准（≈19MHz）。**实测 ✓ `hardware counter 19.0 MHz emulating 2.4 GHz`**（B-08 `Hardware counter too slow` 告警消除）。
 - **B6（零代码）**：env `BOX64_SYSINFO_CACHED=1/NCPU=8/CPUNAME=Cortex-A53/FREQUENCY=1GHz` + `BOX64_DYNACACHE_COMPRESS=0` → **`lscpu popen 告警消除** ✓（须显式给全，缺省 ncpu=1/Unknown/1GHz）。
 - **B1（sigprocmask 优化）暂缓**：dynablock.c 两函数 7 处 pthread_sigmask 必须包围 lock 段（防 SIGSEGV handler 同线程自锁），命中路径无法安全省略，需先量化频率。
 - **P0-3b（2513a29，通用正确性）**：LSE 版 `arm64_atomic_storeifref`/`_d` 失败路径返回期望值（x3/w3）而非 casal 实际结果 → 调用者 `(ret==ref)` 误判成功；patch_p0fixes.py 增补第 6/7 组锚修复（反汇编验证 `mov x0,x2`）。A53 无 LSE 不受影响。
+- **B2（a14c74b，`patch_b2maps.py`，maps 重读粒度）**：`AddNeededLibInternal`（librarian.c）每加载一个依赖库就 `box64_mapclean=0` → 下次 `loadProtectionFromMap`（elfloader.c AllocLoadElfMemory 入口）全量重读 `/proc/self/maps`（proot 下几十 ms/次，几十个 .so 累计秒级），且 B-08 `program break not found` 随每次全量读反复告警。修复三件套：① librarian.c 不再清 mapclean（新 .so 由 AllocLoadElfMemory 自行 mmap 并标记 mapallmem，无需外部全量读）；② custommem.c 三处 mmap 失败重试（原注释写 reload 却被 mapclean 快路径跳过）前强制 `box64_mapclean=0` 补正确性兜底；③ pbrk 告警 static shown_brk 只报一次。**验证 ✓**：qr 功能件全绿且 program break 告警=0、steamcmd q55 十轮 10/10 LOGIN（GUARD≈1100/轮、trig=0），零回归；产物 md5=489608597b9ead852178c4c5571b6c9c（CI 36434607216）。
 - **远端回归 ✓**：B5 19MHz 打点、thrmin/mthrd/x509/tlsx86/bntest2 全绿、steamcmd 6 轮 3 卡 3 GOT=基线；cloneprobe 新旧产物均 rc=139（探针自身问题，非回归）。
 
 ## 三、遗留未完成项
