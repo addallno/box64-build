@@ -306,6 +306,107 @@ def main():
         print("[patch_p12dbg] wrappedlibc.c: P12REMAP 注入完成")
     else:
         print("[patch_p12dbg] wrappedlibc.c P12REMAP 已应用过，跳过")
+
+    # ===== v9: p_blocks realloc 打点 + 信号 handler 状态 dump（坐实 40 字节数组悬空/越界）=====
+    cm = os.path.join(sys.argv[1], "src", "custommem.c")
+    s = open(cm, encoding="utf-8").read()
+    if "P12REALLOC" not in s:
+        # 四处 realloc：锚含后续行区分（A 与 C 主体相同、靠 allocsize 行区分）
+        jobs = [
+            (
+                # map128/guard 区（:692）
+                "        c_blocks += box64_is32bits?256:8;\n"
+                "        p_blocks = (blocklist_t*)box_realloc(p_blocks, c_blocks*sizeof(blocklist_t));\n"
+                "        __sync_synchronize();\n"
+                "    }\n"
+                "    size_t allocsize = MMAPSIZE128;\n",
+                "        c_blocks += box64_is32bits?256:8;\n"
+                "        { void* p12o = p_blocks;\n"
+                "        p_blocks = (blocklist_t*)box_realloc(p_blocks, c_blocks*sizeof(blocklist_t));\n"
+                "        printf_log(LOG_INFO, \"P12REALLOC tag=128 old=%p new=%p c=%d n=%d\\n\", p12o, p_blocks, c_blocks, n_blocks); }\n"
+                "        __sync_synchronize();\n"
+                "    }\n"
+                "    size_t allocsize = MMAPSIZE128;\n",
+                "realloc-128",
+            ),
+            (
+                # map64（:832，带空格风格）
+                "        c_blocks += box64_is32bits ? 256 : 8;\n"
+                "        p_blocks = (blocklist_t*)box_realloc(p_blocks, c_blocks * sizeof(blocklist_t));\n",
+                "        c_blocks += box64_is32bits ? 256 : 8;\n"
+                "        { void* p12o = p_blocks;\n"
+                "        p_blocks = (blocklist_t*)box_realloc(p_blocks, c_blocks * sizeof(blocklist_t));\n"
+                "        printf_log(LOG_INFO, \"P12REALLOC tag=64 old=%p new=%p c=%d n=%d\\n\", p12o, p_blocks, c_blocks, n_blocks); }\n",
+                "realloc-64",
+            ),
+            (
+                # internal（:961）
+                "        c_blocks += box64_is32bits?256:8;\n"
+                "        p_blocks = (blocklist_t*)box_realloc(p_blocks, c_blocks*sizeof(blocklist_t));\n"
+                "        __sync_synchronize();\n"
+                "    }\n"
+                "    size_t allocsize = (fullsize>MMAPSIZE)?fullsize:MMAPSIZE;\n",
+                "        c_blocks += box64_is32bits?256:8;\n"
+                "        { void* p12o = p_blocks;\n"
+                "        p_blocks = (blocklist_t*)box_realloc(p_blocks, c_blocks*sizeof(blocklist_t));\n"
+                "        printf_log(LOG_INFO, \"P12REALLOC tag=list old=%p new=%p c=%d n=%d\\n\", p12o, p_blocks, c_blocks, n_blocks); }\n"
+                "        __sync_synchronize();\n"
+                "    }\n"
+                "    size_t allocsize = (fullsize>MMAPSIZE)?fullsize:MMAPSIZE;\n",
+                "realloc-list",
+            ),
+            (
+                # 第四处（:1263，c_blocks += 4 唯一）
+                "        c_blocks += 4;\n"
+                "        p_blocks = (blocklist_t*)box_realloc(p_blocks, c_blocks*sizeof(blocklist_t));\n",
+                "        c_blocks += 4;\n"
+                "        { void* p12o = p_blocks;\n"
+                "        p_blocks = (blocklist_t*)box_realloc(p_blocks, c_blocks*sizeof(blocklist_t));\n"
+                "        printf_log(LOG_INFO, \"P12REALLOC tag=4 old=%p new=%p c=%d n=%d\\n\", p12o, p_blocks, c_blocks, n_blocks); }\n",
+                "realloc-4",
+            ),
+        ]
+        for anchor, repl, name in jobs:
+            s = sub1(s, anchor, repl, "custommem.c " + name)
+        # dump 函数：插在 internal_customMalloc 定义前（供信号 handler 查状态）
+        fn_anchor = "void* internal_customMalloc(size_t size, int is32bits)\n{\n"
+        s = sub1(
+            s,
+            fn_anchor,
+            "// BOX64-BUILD: p12dbg v9 供信号 handler 查询 p_blocks 状态\n"
+            "void p12_dumpblocks(void) {\n"
+            "    printf_log(LOG_INFO, \"P12CTX p_blocks=%p n=%d c=%d last=%d last64=%d last_list=%d\\n\",\n"
+            "        p_blocks, n_blocks, c_blocks, last_block_index, last_block_index_map64, last_block_index_list);\n"
+            "}\n"
+            "\n" + fn_anchor,
+            "custommem.c dump函数",
+        )
+        open(cm, "w", encoding="utf-8").write(s)
+        print("[patch_p12dbg] custommem.c: 4×REALLOC+dump 注入完成")
+    else:
+        print("[patch_p12dbg] custommem.c 已应用过，跳过")
+
+    sg = os.path.join(sys.argv[1], "src", "libtools", "signals.c")
+    s = open(sg, encoding="utf-8").read()
+    if "p12_dumpblocks" not in s:
+        inc_anchor = '#include "x64_signals.h"\n'
+        s = sub1(
+            s,
+            inc_anchor,
+            inc_anchor + 'extern void p12_dumpblocks(void); // BOX64-BUILD: p12dbg v9\n',
+            "signals.c extern",
+        )
+        fill_anchor = '        printf_log(LOG_INFO, "FillBlock triggered a %s at %p from %p\\n", (sig==X64_SIGSEGV)?"segfault":"bus error", addr, pc);\n'
+        s = sub1(
+            s,
+            fill_anchor,
+            fill_anchor + "        p12_dumpblocks(); // BOX64-BUILD: p12dbg v9\n",
+            "signals.c CTX",
+        )
+        open(sg, "w", encoding="utf-8").write(s)
+        print("[patch_p12dbg] signals.c: extern+CTX 注入完成")
+    else:
+        print("[patch_p12dbg] signals.c 已应用过，跳过")
     return 0
 
 
