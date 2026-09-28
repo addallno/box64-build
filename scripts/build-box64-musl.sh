@@ -315,6 +315,9 @@ python3 $GITHUB_WORKSPACE/scripts/patch_b2maps.py $WORK/box64
 echo "==> 打版本 stamp 注入补丁（CMake git_head.h + banner，批次3 #15）"
 python3 $GITHUB_WORKSPACE/scripts/patch_stamp.py $WORK/box64
 
+echo "==> 打 join 日志插桩补丁（pthread_join 失败错误码，steam 卡死排查）"
+python3 $GITHUB_WORKSPACE/scripts/patch_joinlog.py $WORK/box64
+
 echo "==> 生成 musl 缺失符号 stub（gen-libc-stubs.py）"
 MUSL_SYMS_OPT=""
 if [ -s "$MUSL_SYMS" ]; then
