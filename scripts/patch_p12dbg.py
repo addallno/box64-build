@@ -157,6 +157,64 @@ def main():
         print("[patch_p12dbg] private.h: GO->GOM 完成")
     else:
         print("[patch_p12dbg] private.h 已应用过，跳过")
+
+    # ---- dynarec_native.c：FillBlock 两行加 tid + CreateEmptyBlock P12EMPTY（v6）----
+    dn = os.path.join(root, "src", "dynarec", "dynarec_native.c")
+    if not os.path.isfile(dn):
+        fail(f"文件不存在: {dn}")
+    s = open(dn, encoding="utf-8").read()
+    if "P12EMPTY" not in s:
+        s = sub1(
+            s,
+            'printf_log(LOG_INFO, "FillBlock at %p triggered a segfault, truncating at %d(%p)\\n", (void*)addr, helper.size, (void*)end);',
+            'printf_log(LOG_INFO, "FillBlock tid=%d at %p triggered a segfault, truncating at %d(%p)\\n", GetTID(), (void*)addr, helper.size, (void*)end); // BOX64-BUILD: p12dbg',
+            "dynarec_native truncating tid",
+        )
+        s = sub1(
+            s,
+            'printf_log(LOG_INFO, "FillBlock at %p triggered a segfault (state=%d, size=%d), canceling\\n", (void*)addr, state, helper.size);',
+            'printf_log(LOG_INFO, "FillBlock tid=%d at %p triggered a segfault (state=%d, size=%d), canceling\\n", GetTID(), (void*)addr, state, helper.size); // BOX64-BUILD: p12dbg',
+            "dynarec_native canceling tid",
+        )
+        s = sub1(
+            s,
+            "    // all done...\n"
+            "    ClearCache(actual_p+sizeof(void*), JMPNEXT_SIZE-sizeof(void*));   // need to clear the cache before execution...\n"
+            "    return block;",
+            '    printf_log(LOG_INFO, "P12EMPTY tid=%d addr=%p\\n", GetTID(), (void*)addr); // BOX64-BUILD: p12dbg\n'
+            "    // all done...\n"
+            "    ClearCache(actual_p+sizeof(void*), JMPNEXT_SIZE-sizeof(void*));   // need to clear the cache before execution...\n"
+            "    return block;",
+            "dynarec_native P12EMPTY",
+        )
+        open(dn, "w", encoding="utf-8").write(s)
+        print("[patch_p12dbg] dynarec_native.c: tid+P12EMPTY 注入完成")
+    else:
+        print("[patch_p12dbg] dynarec_native.c 已应用过，跳过")
+
+    # ---- dynarec.c：解释器回退分支 P12INTERP 限流打印（v6）----
+    dc = os.path.join(root, "src", "dynarec", "dynarec.c")
+    if not os.path.isfile(dc):
+        fail(f"文件不存在: {dc}")
+    s = open(dc, encoding="utf-8").read()
+    if "P12INTERP" not in s:
+        s = sub1(
+            s,
+            "            if(!block || !block->block || !block->done || ACCESS_FLAG(F_TF)) {\n"
+            "                // no block, or block doesn't have DynaRec content (yet, temp is not null)\n",
+            "            if(!block || !block->block || !block->done || ACCESS_FLAG(F_TF)) {\n"
+            "                // no block, or block doesn't have DynaRec content (yet, temp is not null)\n"
+            "                { // BOX64-BUILD: p12dbg done=0/空块解释器回退限流打点\n"
+            "                    static int p12i = 0;\n"
+            '                    if((++p12i) <= 20 || (p12i % 500) == 0)\n'
+            '                        printf_log(LOG_INFO, "P12INTERP n=%d tid=%d rip=%p block=%p done=%d\\n", p12i, GetTID(), (void*)R_RIP, block, block ? (int)block->done : -1);\n'
+            "                }\n",
+            "dynarec.c P12INTERP",
+        )
+        open(dc, "w", encoding="utf-8").write(s)
+        print("[patch_p12dbg] dynarec.c: P12INTERP 注入完成")
+    else:
+        print("[patch_p12dbg] dynarec.c 已应用过，跳过")
     return 0
 
 
