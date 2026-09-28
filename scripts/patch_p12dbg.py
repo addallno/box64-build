@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-临时打点 patch（B-12 waker 定位实验，结论得出后应从挂链移除）：
-在 x64Syscall_linux 入口打印全部 futex / clone / clone3 调用，
-用于对比 STUCK 轮与 LOGIN 轮的唤醒链（谁 post、是否有 WAKE 发出、clone 爆发点）。
+临时打点 patch v2（B-12 waker 定位，结论后从挂链移除）：
+sem_post/sem_wait 原为 GO（直转 host，x64Syscall 不可见），改为 GOM+my_ 打印；
+my_pthread_create 打印创建者。
+输出标记：P12POST / P12WAIT / P12CREATE
 哨兵：BOX64-BUILD: p12dbg
 用法：python3 patch_p12dbg.py <box64源码目录>
 """
@@ -12,46 +13,97 @@ import os
 
 SENTINEL = "BOX64-BUILD: p12dbg"
 
+
 def fail(msg):
     print(f"[patch_p12dbg] 失败: {msg}", file=sys.stderr)
     sys.exit(1)
 
+
+def sub1(src, old, new, tag):
+    n = src.count(old)
+    if n != 1:
+        fail(f"{tag}: 锚点命中 {n} 次（期望 1）")
+    return src.replace(old, new, 1)
+
+
 def main():
     if len(sys.argv) != 2:
         fail("用法: patch_p12dbg.py <box64目录>")
-    target = os.path.join(sys.argv[1], "src", "emu", "x64syscall.c")
-    if not os.path.isfile(target):
-        fail(f"文件不存在: {target}")
-    with open(target, "r", encoding="utf-8") as f:
-        src = f.read()
-    if SENTINEL in src:
-        print("[patch_p12dbg] 已应用过，跳过")
-        return 0
+    root = sys.argv[1]
+    jobs = []
 
-    # 锚：x64Syscall_linux 内 s/log 开头两行（全文件唯一；
-    # 不能含 RESET_FLAGS 行——isnanf 的 restore-lin 会插在其后断锚）
-    anchor = (
-        "    uint32_t s = R_EAX; // EAX? (syscalls only go up to 547 anyways)\n"
-        "    int log = 0;\n"
-    )
-    n = src.count(anchor)
-    if n != 1:
-        fail(f"锚点命中 {n} 次（期望 1）")
-    injection = (
-        "    // BOX64-BUILD: p12dbg 临时打点：futex/clone 全踪（B-12 唤醒链定位）\n"
-        "    if(s == 202) {\n"
-        "        printf_log(LOG_NONE, \"P12FUTEX tid=%d addr=%p op=%u arg=%d r8=%d\\n\",\n"
-        "            GetTID(), (void*)R_RDI, (unsigned)R_RSI, (int)R_RDX, (int)R_R10);\n"
-        "    } else if(s == 56 || s == 435) {\n"
-        "        printf_log(LOG_NONE, \"P12CLONE tid=%d s=%d flag=%u\\n\",\n"
-        "            GetTID(), s, (unsigned)R_RDI);\n"
-        "    }\n"
-    )
-    src = src.replace(anchor, anchor + injection, 1)
-    with open(target, "w", encoding="utf-8") as f:
-        f.write(src)
-    print("[patch_p12dbg] 已应用 1 处")
+    # ---- threads.c：include + my_pthread_create 打印 + my_sem_* 实现 ----
+    tc = os.path.join(root, "src", "libtools", "threads.c")
+    if not os.path.isfile(tc):
+        fail(f"文件不存在: {tc}")
+    s = open(tc, encoding="utf-8").read()
+    if SENTINEL not in s:
+        # 1) semaphore.h include
+        s = sub1(
+            s,
+            "#include <pthread.h>\n",
+            "#include <pthread.h>\n#include <semaphore.h> // BOX64-BUILD: p12dbg sem 打点需要\n",
+            "threads.c include",
+        )
+        # 2) my_pthread_create 入口打印
+        s = sub1(
+            s,
+            "EXPORT int my_pthread_create(x64emu_t *emu, void* t, void* attr, void* start_routine, void* arg)\n{\n",
+            "EXPORT int my_pthread_create(x64emu_t *emu, void* t, void* attr, void* start_routine, void* arg)\n"
+            "{\n"
+            '\tprintf_log(LOG_NONE, "P12CREATE tid=%d start=%p arg=%p\\n", GetTID(), start_routine, arg); // BOX64-BUILD: p12dbg\n',
+            "threads.c create打印",
+        )
+        # 3) my_sem_post / my_sem_wait 实现（插在 my_pthread_create 之前）
+        sem_impl = (
+            "// BOX64-BUILD: p12dbg 临时 sem 打点（GOM 目标；直调 musl sem_*，与现成 my_ 模式一致）\n"
+            "EXPORT int my_sem_post(x64emu_t* emu, sem_t* s)\n"
+            "{\n"
+            '\t(void)emu;\n'
+            '\tprintf_log(LOG_NONE, "P12POST tid=%d sem=%p\\n", GetTID(), (void*)s);\n'
+            "\treturn sem_post(s);\n"
+            "}\n"
+            "EXPORT int my_sem_wait(x64emu_t* emu, sem_t* s)\n"
+            "{\n"
+            '\t(void)emu;\n'
+            '\tprintf_log(LOG_NONE, "P12WAIT tid=%d sem=%p\\n", GetTID(), (void*)s);\n'
+            "\treturn sem_wait(s);\n"
+            "}\n"
+            "\n"
+        )
+        s = sub1(
+            s,
+            "EXPORT int my_pthread_create(x64emu_t *emu, void* t, void* attr, void* start_routine, void* arg)\n",
+            sem_impl + "EXPORT int my_pthread_create(x64emu_t *emu, void* t, void* attr, void* start_routine, void* arg)\n",
+            "threads.c sem实现",
+        )
+        jobs.append(tc)
+        open(tc, "w", encoding="utf-8").write(s)
+        print("[patch_p12dbg] threads.c: 3 处注入完成")
+    else:
+        print("[patch_p12dbg] threads.c 已应用过，跳过")
+
+    # ---- private.h：GO -> GOM ----
+    ph = os.path.join(root, "src", "wrapped", "wrappedlibpthread_private.h")
+    if not os.path.isfile(ph):
+        fail(f"文件不存在: {ph}")
+    s = open(ph, encoding="utf-8").read()
+    changed = False
+    if "GOM(sem_post, iFEp) // BOX64-BUILD: p12dbg" not in s:
+        s = sub1(s, "GO(sem_post, iFp)\n",
+                 "GOM(sem_post, iFEp) // BOX64-BUILD: p12dbg\n", "private.h sem_post")
+        changed = True
+    if "GOM(sem_wait, iFEp) // BOX64-BUILD: p12dbg" not in s:
+        s = sub1(s, "GO(sem_wait, iFp)\n",
+                 "GOM(sem_wait, iFEp) // BOX64-BUILD: p12dbg\n", "private.h sem_wait")
+        changed = True
+    if changed:
+        open(ph, "w", encoding="utf-8").write(s)
+        print("[patch_p12dbg] private.h: GO->GOM 完成")
+    else:
+        print("[patch_p12dbg] private.h 已应用过，跳过")
     return 0
+
 
 if __name__ == "__main__":
     sys.exit(main())
