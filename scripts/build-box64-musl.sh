@@ -412,6 +412,7 @@ cmake .. \
   -DBOX32=ON \
   -DSTATICBUILD=${STATICBUILD:-true} \
   -DBAD_SIGNAL=ON \
+  -DBAD_PKILL=ON \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo
 make -j$(nproc)
 
