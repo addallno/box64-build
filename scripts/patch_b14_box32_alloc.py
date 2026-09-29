@@ -165,21 +165,23 @@ EXPORT char* my32_strndup(const char* s, size_t n)
 // 会在 musl 内部 memcpy 读到垃圾指针崩（访问 0xffffffffffff00，q57 SIGSEGV）。
 // 且 wrapper aEipa_32 对返回值调 to_locale()：非小值 host 指针会被
 // to_struct_locale 当 locale 结构 fill（&dummy int 被误读出野指针，同样崩）。
-// 统一返回 <0x100 伪句柄：to_locale/from_locale 两边都走直通快路径，无 hash、无 fill。
+// 返回 box64 静态 fake 缓冲（<4GB，box32 guest 直接可读，guest 还会
+// 解引用如 [loc+0x3c]）；box32.c to_locale 对该地址特例直通不 fill。
+extern void* box32_get_fake_locale(void);
 EXPORT void* my32_newlocale(x64emu_t* emu, int mask, const char* name, void* out)
 {
     (void)emu; (void)mask; (void)name; (void)out;
-    return (void*)0x1;
+    return box32_get_fake_locale();
 }
 EXPORT void* my32_duplocale(x64emu_t* emu, void* loc)
 {
     (void)emu; (void)loc;
-    return (void*)0x1;
+    return box32_get_fake_locale();
 }
 EXPORT void* my32_uselocale(x64emu_t* emu, void* loc)
 {
     (void)emu; (void)loc;
-    return (void*)0x1;
+    return box32_get_fake_locale();
 }
 EXPORT void my32_freelocale(x64emu_t* emu, void* loc)
 {
@@ -353,6 +355,22 @@ JOBS = [
          "            *addr = s->addr;\n"
          "            *size = sizeof(void*);\n"
          "            *weak = s->weak;\n"),
+    ]),
+    # B-14: box32.c 提供 guest 可读 fake locale 缓冲；to_locale 对其直通不 fill
+    ("src/box32.c", [
+        ("void* from_locale(ptr_t l) {\n",
+         "// B-14: fake locale 缓冲：guest 直接解引用 locale_t（如 [loc+0x3c]），\n"
+         "// 静态零填充区 <4GB box32 可读；to_locale 对该地址特例直通\n"
+         "static char box32_fake_locale[4096];\n"
+         "void* box32_get_fake_locale(void) { return box32_fake_locale; }\n"
+         "\n"
+         "void* from_locale(ptr_t l) {\n"),
+        ("ptr_t to_locale(void* p) {\n    if((uintptr_t)p < 0x100) {\n",
+         "ptr_t to_locale(void* p) {\n"
+         "    if(p == box32_fake_locale) {\n"
+         "        return to_ptrv(p);\n"
+         "    }\n"
+         "    if((uintptr_t)p < 0x100) {\n"),
     ]),
 ]
 
