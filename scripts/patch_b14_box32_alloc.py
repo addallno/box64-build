@@ -264,6 +264,12 @@ JOBS = [
         ("    k = kh_get_with_hash(symbol2map, lib->w.symbol2map, name, hash);\n",
          "    k = kh_get_with_hash(symbol2map, lib->w.symbol2map, name, hash);\n"
          "    if(strstr(name, \"locale\")) printf_log(LOG_INFO, \"B14s2kh lib=%s name=%s k=%d end=%d\\n\", lib->name, name, (int)k, (int)kh_end(lib->w.symbol2map));\n"),
+        # symbol2map 命中后 weak/resolved 实证
+        ("    if (k!=kh_end(lib->w.symbol2map))  {\n"
+         "        symbol2_t *s = &kh_value(lib->w.symbol2map, k);\n",
+         "    if (k!=kh_end(lib->w.symbol2map))  {\n"
+         "        symbol2_t *s = &kh_value(lib->w.symbol2map, k);\n"
+         "        if(strstr(name, \"locale\")) printf_log(LOG_INFO, \"B14s2w name=%s weak=%d resolved=%d addr=%p noweak=%d\\n\", name, s->weak, s->resolved, (void*)s->addr, noweak);\n"),
         # 族级命中实证：datamap/stsymbolmap/symbolmap/wsymbolmap
         ("    khint_t k = kh_get(datamap, lib->w.datamap, name);\n"
          "    if (k!=kh_end(lib->w.datamap)) {\n",
