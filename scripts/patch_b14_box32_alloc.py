@@ -263,7 +263,26 @@ JOBS = [
         # symbol2map kh 命中与否实证
         ("    k = kh_get_with_hash(symbol2map, lib->w.symbol2map, name, hash);\n",
          "    k = kh_get_with_hash(symbol2map, lib->w.symbol2map, name, hash);\n"
-         "    if(strstr(name, \"locale\")) printf_log(LOG_INFO, \"B14s2kh name=%s k=%d end=%d\\n\", name, (int)k, (int)kh_end(lib->w.symbol2map));\n"),
+         "    if(strstr(name, \"locale\")) printf_log(LOG_INFO, \"B14s2kh lib=%s name=%s k=%d end=%d\\n\", lib->name, name, (int)k, (int)kh_end(lib->w.symbol2map));\n"),
+        # 族级命中实证：datamap/stsymbolmap/symbolmap/wsymbolmap
+        ("    khint_t k = kh_get(datamap, lib->w.datamap, name);\n"
+         "    if (k!=kh_end(lib->w.datamap)) {\n",
+         "    khint_t k = kh_get(datamap, lib->w.datamap, name);\n"
+         "    if (k!=kh_end(lib->w.datamap)) {\n"
+         "        if(strstr(name, \"locale\")) printf_log(LOG_INFO, \"B14hit data name=%s lib=%s\\n\", name, lib->name);\n"),
+        ("    k = kh_get_with_hash(symbolmap, lib->w.stsymbolmap, name, hash);\n"
+         "    if (k!=kh_end(lib->w.stsymbolmap)) {\n",
+         "    k = kh_get_with_hash(symbolmap, lib->w.stsymbolmap, name, hash);\n"
+         "    if (k!=kh_end(lib->w.stsymbolmap)) {\n"
+         "        if(strstr(name, \"locale\")) printf_log(LOG_INFO, \"B14hit st name=%s lib=%s\\n\", name, lib->name);\n"),
+        ("    k = kh_get_with_hash(symbolmap, lib->w.symbolmap, name, hash);\n"
+         "    if (k!=kh_end(lib->w.symbolmap)) {\n",
+         "    k = kh_get_with_hash(symbolmap, lib->w.symbolmap, name, hash);\n"
+         "    if (k!=kh_end(lib->w.symbolmap)) {\n"
+         "        if(strstr(name, \"locale\")) printf_log(LOG_INFO, \"B14hit s name=%s lib=%s\\n\", name, lib->name);\n"),
+        ("        k = kh_get_with_hash(symbolmap, lib->w.wsymbolmap, name, hash);\n",
+         "        k = kh_get_with_hash(symbolmap, lib->w.wsymbolmap, name, hash);\n"
+         "        if(strstr(name, \"locale\")) printf_log(LOG_INFO, \"B14hit ws k=%d end=%d name=%s lib=%s\\n\", (int)k, (int)kh_end(lib->w.wsymbolmap), name, lib->name);\n"),
         # mysymbolmap：块内 s2 可见，resolve 后 s->addr=桥
         ("                s->resolved = 1;\n"
          "            }\n"
