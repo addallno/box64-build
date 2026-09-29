@@ -392,6 +392,24 @@ JOBS = [
          "        return 0; // B-14: STATICBUILD 下该函数指针为 NULL，防 call 0\n"
          "}\n"),
     ]),
+    # B-14: dladdr 返回的 host 侧字符串（host heap 0x7f...）to_ptrv 超 4GB →
+    # box64_abort()；字符串拷到 box32 可达区，指针超范围置 0
+    ("src/wrapped32/wrappedlibdl.c", [
+        ("    info->dli_saddr = to_ptrv(start);\n"
+         "    info->dli_fname = to_ptrv((void*)fname);\n"
+         "    info->dli_fbase = to_ptrv(base);\n"
+         "    // TODO: If dli_sname points to native_name, how do I avoid data tampering during usage?\n"
+         "    info->dli_sname = to_ptrv((void*)sname);\n",
+         "    // B-14: >4GB host 指针防 abort：字符串 box32_strdup 拷到 <4GB，指针置 0\n"
+         "    #define B14_S32(s) ((void*)((uintptr_t)(s) < 0x100000000LL ? (uintptr_t)(s) : ((s) ? (uintptr_t)box32_strdup(s) : 0)))\n"
+         "    #define B14_P32(p) ((void*)((uintptr_t)(p) < 0x100000000LL ? (uintptr_t)(p) : 0))\n"
+         "    info->dli_saddr = to_ptrv(B14_P32(start));\n"
+         "    info->dli_fname = to_ptrv(B14_S32(fname));\n"
+         "    info->dli_fbase = to_ptrv(B14_P32(base));\n"
+         "    info->dli_sname = to_ptrv(B14_S32(sname));\n"
+         "    #undef B14_S32\n"
+         "    #undef B14_P32\n"),
+    ]),
 ]
 
 
