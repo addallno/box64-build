@@ -161,6 +161,29 @@ EXPORT char* my32_strndup(const char* s, size_t n)
     if(d) memcpy(d, s, len);
     return d;
 }
+// locale 桩：guest i386 locale 对象与 musl 结构不兼容，直通宿主 __newlocale
+// 会在 musl 内部 memcpy 读到垃圾指针崩（访问 0xffffffffffff00，q57 SIGSEGV）。
+// 统一返回共享假 C-locale 对象（box64 静态区 <4GB，box32 下 guest 可读）
+static int box32_locale_dummy = 0;
+EXPORT void* my32_newlocale(x64emu_t* emu, int mask, const char* name, void* out)
+{
+    (void)emu; (void)mask; (void)name; (void)out;
+    return &box32_locale_dummy;
+}
+EXPORT void* my32_duplocale(x64emu_t* emu, void* loc)
+{
+    (void)emu; (void)loc;
+    return &box32_locale_dummy;
+}
+EXPORT void* my32_uselocale(x64emu_t* emu, void* loc)
+{
+    (void)emu; (void)loc;
+    return &box32_locale_dummy;
+}
+EXPORT void my32_freelocale(x64emu_t* emu, void* loc)
+{
+    (void)emu; (void)loc;
+}
 """
 
 REALLOCARRAY_OLD = """EXPORT void* my32_reallocarray(void* ptr, size_t nmemb, size_t size)
@@ -201,6 +224,14 @@ JOBS = [
         ("GOW(posix_memalign, iEBp_LL)\n", "GOM(posix_memalign, iEBp_LL)\n"),
         ("GOW(strndup, pEpL)\n", "GOM(strndup, pEpL)\n"),
         ("GO(__strndup, pEpL)\n", "GO2(__strndup, pEpL, my32_strndup)\n"),
+        # locale 族直通宿主 musl 崩（i386/musl locale 对象 ABI 不兼容）→ my32_* 假桩
+        ("GOW(newlocale, aEipa)\n", "GOM(newlocale, aEipa)\n"),
+        ("GO(__newlocale, aEipa)\n", "GO2(__newlocale, aEipa, my32_newlocale)\n"),
+        ("GO(__duplocale, aEa)\n", "GO2(__duplocale, aEa, my32_duplocale)\n"),
+        ("GOW(freelocale, vEA)\n", "GOM(freelocale, vEA)\n"),
+        ("GO(__freelocale, vEA)\n", "GO2(__freelocale, vEA, my32_freelocale)\n"),
+        ("GOW(uselocale, aEa)\n", "GOM(uselocale, aEa)\n"),
+        ("GO(__uselocale, aEa)\n", "GO2(__uselocale, aEa, my32_uselocale)\n"),
     ]),
     ("src/wrapped32/wrappedlibc.c", [
         (MY32_MALLOC_OLD, MY32_MALLOC_NEW),
