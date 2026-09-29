@@ -163,22 +163,23 @@ EXPORT char* my32_strndup(const char* s, size_t n)
 }
 // locale 桩：guest i386 locale 对象与 musl 结构不兼容，直通宿主 __newlocale
 // 会在 musl 内部 memcpy 读到垃圾指针崩（访问 0xffffffffffff00，q57 SIGSEGV）。
-// 统一返回共享假 C-locale 对象（box64 静态区 <4GB，box32 下 guest 可读）
-static int box32_locale_dummy = 0;
+// 且 wrapper aEipa_32 对返回值调 to_locale()：非小值 host 指针会被
+// to_struct_locale 当 locale 结构 fill（&dummy int 被误读出野指针，同样崩）。
+// 统一返回 <0x100 伪句柄：to_locale/from_locale 两边都走直通快路径，无 hash、无 fill。
 EXPORT void* my32_newlocale(x64emu_t* emu, int mask, const char* name, void* out)
 {
     (void)emu; (void)mask; (void)name; (void)out;
-    return &box32_locale_dummy;
+    return (void*)0x1;
 }
 EXPORT void* my32_duplocale(x64emu_t* emu, void* loc)
 {
     (void)emu; (void)loc;
-    return &box32_locale_dummy;
+    return (void*)0x1;
 }
 EXPORT void* my32_uselocale(x64emu_t* emu, void* loc)
 {
     (void)emu; (void)loc;
-    return &box32_locale_dummy;
+    return (void*)0x1;
 }
 EXPORT void my32_freelocale(x64emu_t* emu, void* loc)
 {
