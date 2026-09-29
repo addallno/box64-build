@@ -318,6 +318,9 @@ python3 $GITHUB_WORKSPACE/scripts/patch_stamp.py $WORK/box64
 echo "==> 打 join 日志插桩补丁（pthread_join 失败错误码，steam 卡死排查）"
 python3 $GITHUB_WORKSPACE/scripts/patch_joinlog.py $WORK/box64
 
+echo "==> 打 box32 分配族补丁（guest malloc/free 走 actual_*，32 位 steamcmd SIGABRT，B-14）"
+python3 $GITHUB_WORKSPACE/scripts/patch_b14_box32_alloc.py $WORK/box64
+
 echo "==> 生成 musl 缺失符号 stub（gen-libc-stubs.py）"
 MUSL_SYMS_OPT=""
 if [ -s "$MUSL_SYMS" ]; then
