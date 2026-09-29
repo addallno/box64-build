@@ -248,10 +248,17 @@ JOBS = [
         # B-14 诊断：qsort 链打点（compar 回调参数错位 vs 数组含 NULL 的定位）
         ("static int my32_compare_r_cb(void* a, void* b, compare_r_t* arg)\n{\n",
          "static int my32_compare_r_cb(void* a, void* b, compare_r_t* arg)\n{\n"
-         "    { static int n=0; if(n<5) { ++n; printf_log(LOG_INFO, \"B14QCMP #%d a=%p b=%p\\n\", n, a, b); } }\n"),
+         "    { static int n=0; if(n<5) { ++n; printf_log(LOG_INFO, \"B14QCMP #%d a=%p *a=%p b=%p *b=%p\\n\", n, a, *(void**)a, b, *(void**)b); fflush(stderr); } }\n"),
         ("EXPORT void my32_qsort(x64emu_t* emu, void* base, size_t nmemb, size_t size, void* fnc)\n{\n",
          "EXPORT void my32_qsort(x64emu_t* emu, void* base, size_t nmemb, size_t size, void* fnc)\n{\n"
-         "    printf_log(LOG_INFO, \"B14QSORT base=%p n=%d sz=%d f=%p\\n\", base, (int)nmemb, (int)size, fnc);\n"),
+         "    printf_log(LOG_INFO, \"B14QSORT base=%p n=%d sz=%d f=%p\\n\", base, (int)nmemb, (int)size, fnc);\n"
+         "    { uint32_t* p=(uint32_t*)base; int i, nz=0; for(i=0;i<(int)nmemb;++i) if(p[i]) ++nz;\n"
+         "      printf_log(LOG_INFO, \"B14QDUMP nz=%d/%d e0=%08x e1=%08x e2=%08x e59=%08x\\n\", nz, (int)nmemb, p[0], p[1], p[2], p[(int)nmemb-1]); fflush(stderr); }\n"),
+        # B14QDONE：qsort_r 是否完整返回（区分崩在 qsort 内 vs 后续调用）
+        ("    qsort_r(base, nmemb, size, (__compar_d_fn_t)my32_compare_r_cb, &args);\n}\nEXPORT void my32_qsort_r",
+         "    qsort_r(base, nmemb, size, (__compar_d_fn_t)my32_compare_r_cb, &args);\n"
+         "    printf_log(LOG_INFO, \"B14QDONE base=%p\\n\", base); fflush(stderr);\n"
+         "}\nEXPORT void my32_qsort_r"),
     ]),
     ("src/wrapped/wrappedlibc.c", [
         (MALLOC_OLD, MALLOC_NEW),
