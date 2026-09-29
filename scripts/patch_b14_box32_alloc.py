@@ -240,6 +240,70 @@ JOBS = [
     ("src/wrapped/wrappedlibc.c", [
         (MALLOC_OLD, MALLOC_NEW),
     ]),
+    # 方案2：GOM(mysymbolmap)/GO2(symbol2map)/wmy 三族 resolve 后注册 raw→桥 alternate，
+    # 解释器 call [GOT=raw] 时经 getAlternate 转桥，桥 f=my32_* 桩（reloc 打印 raw 不影响执行）
+    ("src/librarian/library.c", [
+        ('#include "library_inner.h"\n',
+         '#include "library_inner.h"\n#include "alternate.h" // B-14: resolve 后注册 raw→桥 alternate\n'),
+        # mysymbolmap：块内 s2 可见，resolve 后 s->addr=桥
+        ("                s->resolved = 1;\n"
+         "            }\n"
+         "        }\n"
+         "        *addr = s->addr;\n"
+         "        *size = sizeof(void*);\n"
+         "        *weak = 0;\n"
+         "        return 1;\n"
+         "    }\n"
+         "    // check in stsymbolmap (return struct...)\n",
+         "                s->resolved = 1;\n"
+         "            }\n"
+         "            printf_log(LOG_INFO, \"B14DBG my sym=%s symbol=%p addr=%p s2=%d\\n\", name, symbol, (void*)s->addr, s2?1:0);\n"
+         "            if(s->addr && (void*)s->addr != symbol)\n"
+         "                addAlternate(symbol, (void*)s->addr);\n"
+         "        }\n"
+         "        *addr = s->addr;\n"
+         "        *size = sizeof(void*);\n"
+         "        *weak = 0;\n"
+         "        return 1;\n"
+         "    }\n"
+         "    // check in stsymbolmap (return struct...)\n"),
+        # wmysymbolmap：双闭合独特缩进
+        ("            } else {\n"
+         "                s->addr = AddCheckBridge(lib->w.bridge, s->w, symbol, 0, name);\n"
+         "                s->resolved = 1;\n"
+         "            }\n"
+         "            }\n"
+         "            *addr = s->addr;\n"
+         "            *size = sizeof(void*);\n"
+         "            *weak = 1;\n",
+         "            } else {\n"
+         "                s->addr = AddCheckBridge(lib->w.bridge, s->w, symbol, 0, name);\n"
+         "                s->resolved = 1;\n"
+         "            }\n"
+         "            printf_log(LOG_INFO, \"B14DBG wmy sym=%s symbol=%p addr=%p s2=%d\\n\", name, symbol, (void*)s->addr, s2?1:0);\n"
+         "            if(s->addr && (void*)s->addr != symbol)\n"
+         "                addAlternate(symbol, (void*)s->addr);\n"
+         "            }\n"
+         "            *addr = s->addr;\n"
+         "            *size = sizeof(void*);\n"
+         "            *weak = 1;\n"),
+        # symbol2map：*weak = s->weak 唯一定位，块内插
+        ("                s->addr = AddCheckBridge(lib->w.bridge, s->w, symbol, 0, name);\n"
+         "                s->resolved = 1;\n"
+         "            }\n"
+         "            *addr = s->addr;\n"
+         "            *size = sizeof(void*);\n"
+         "            *weak = s->weak;\n",
+         "                s->addr = AddCheckBridge(lib->w.bridge, s->w, symbol, 0, name);\n"
+         "                s->resolved = 1;\n"
+         "                printf_log(LOG_INFO, \"B14DBG s2map sym=%s symbol=%p addr=%p\\n\", name, symbol, (void*)s->addr);\n"
+         "                if(s->addr && (void*)s->addr != symbol)\n"
+         "                    addAlternate(symbol, (void*)s->addr);\n"
+         "            }\n"
+         "            *addr = s->addr;\n"
+         "            *size = sizeof(void*);\n"
+         "            *weak = s->weak;\n"),
+    ]),
 ]
 
 
