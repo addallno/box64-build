@@ -399,15 +399,17 @@ JOBS = [
          "    else\n"
          "        return box_malloc_usable_size(p);\n"
          "}\n",
-         "size_t box32_malloc_usable_size(void* p)\n"
-         "{\n"
-         "    if(isCustomAddr(p))\n"
-         "        return customGetUsableSize(p);\n"
-         "    else if(box_malloc_usable_size)\n"
-         "        return box_malloc_usable_size(p);\n"
-         "    else\n"
-         "        return 0; // B-14: STATICBUILD 下该函数指针为 NULL，防 call 0\n"
-         "}\n"),
+        "size_t box32_malloc_usable_size(void* p)\n"
+        "{\n"
+        "    if(isCustomAddr(p))\n"
+        "        return customGetUsableSize(p);\n"
+        "    else if(box_malloc_usable_size)\n"
+        "        return box_malloc_usable_size(p);\n"
+        "    else {\n"
+        "        extern size_t malloc_usable_size(void*); // B-14: 指针 NULL，直通 musl 真实现（堆 0xFFF8xxxx usable=0 会让 guest 逻辑出错）\n"
+        "        return malloc_usable_size(p);\n"
+        "    }\n"
+        "}\n"),
     ]),
     # B-14: dladdr 返回的 host 侧字符串（host heap 0x7f...）to_ptrv 超 4GB →
     # box64_abort()；字符串拷到 box32 可达区，指针超范围置 0
