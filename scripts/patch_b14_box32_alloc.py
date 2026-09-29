@@ -76,6 +76,7 @@ EXPORT void* my_memalign(size_t alignment, size_t size)
 }
 EXPORT size_t my_malloc_usable_size(void* ptr)
 {
+    extern size_t malloc_usable_size(void* ptr); // musl stdlib.h 未声明，防隐式 int() 与 gen 头冲突
     // actual_* 的 box_malloc_usable_size 在 STATICBUILD 下无声明（且 mallochook
     // 变量可能为 NULL），显式分支绕开；32 位堆走 box32_，其余直通宿主
     if(box64_is32bits) return box32_malloc_usable_size(ptr);
@@ -124,6 +125,7 @@ EXPORT void* my32_memalign(size_t align, size_t size)
 }
 EXPORT size_t my32_malloc_usable_size(void* ptr)
 {
+    extern size_t malloc_usable_size(void* ptr); // musl stdlib.h 未声明，防隐式 int() 与 gen 头冲突
     // 同 my_malloc_usable_size：STATICBUILD 下 box_malloc_usable_size 无声明，显式分支
     if(box64_is32bits) return box32_malloc_usable_size(ptr);
     return malloc_usable_size(ptr);
