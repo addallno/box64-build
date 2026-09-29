@@ -245,6 +245,25 @@ JOBS = [
     ("src/librarian/library.c", [
         ('#include "library_inner.h"\n',
          '#include "library_inner.h"\n#include "alternate.h" // B-14: resolve 后注册 raw→桥 alternate\n'),
+        # WrappedLib_GetGlobal 入口实证（locale 过滤）
+        ("    if (!getSymbolInMaps(lib, name, 1, &addr, &size, &wk, *version, *vername, local, *veropt)) {\n"
+         "        return 0;\n"
+         "    }\n",
+         "    int dbg_get = getSymbolInMaps(lib, name, 1, &addr, &size, &wk, *version, *vername, local, *veropt);\n"
+         "    if(strstr(name, \"locale\")) printf_log(LOG_INFO, \"B14GG lib=%s name=%s get=%d addr=%p wk=%d\\n\", lib->name, name, dbg_get, (void*)addr, wk);\n"
+         "    if (!dbg_get) {\n"
+         "        return 0;\n"
+         "    }\n"),
+        # getSymbolInSymbolMaps 入口实证
+        ("    const khint_t hash = kh_hash(symbolmap, name);\n"
+         "    void* symbol;\n",
+         "    const khint_t hash = kh_hash(symbolmap, name);\n"
+         "    void* symbol;\n"
+         "    if(strstr(name, \"locale\")) printf_log(LOG_INFO, \"B14SIM in name=%s noweak=%d\\n\", name, noweak);\n"),
+        # symbol2map kh 命中与否实证
+        ("    k = kh_get_with_hash(symbol2map, lib->w.symbol2map, name, hash);\n",
+         "    k = kh_get_with_hash(symbol2map, lib->w.symbol2map, name, hash);\n"
+         "    if(strstr(name, \"locale\")) printf_log(LOG_INFO, \"B14s2kh name=%s k=%d end=%d\\n\", name, (int)k, (int)kh_end(lib->w.symbol2map));\n"),
         # mysymbolmap：块内 s2 可见，resolve 后 s->addr=桥
         ("                s->resolved = 1;\n"
          "            }\n"
