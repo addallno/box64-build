@@ -171,6 +171,7 @@ extern void* box32_get_fake_locale(void);
 EXPORT void* my32_newlocale(x64emu_t* emu, int mask, const char* name, void* out)
 {
     (void)emu; (void)mask; (void)name; (void)out;
+    printf_log(LOG_INFO, "B14STUB newlocale\\n"); // B-14 诊断：确认桥 native 目标=stub
     return box32_get_fake_locale();
 }
 EXPORT void* my32_duplocale(x64emu_t* emu, void* loc)
@@ -367,7 +368,9 @@ JOBS = [
          "void* from_locale(ptr_t l) {\n"),
         ("ptr_t to_locale(void* p) {\n    if((uintptr_t)p < 0x100) {\n",
          "ptr_t to_locale(void* p) {\n"
-         "    if(p == box32_fake_locale) {\n"
+         # volatile 防编译器（LTO）判定 p 不可能为 fake 数组而删除比较
+         "    void* volatile b14fl = box32_fake_locale;\n"
+         "    if(p == b14fl) {\n"
          "        return to_ptrv(p);\n"
          "    }\n"
          "    if((uintptr_t)p < 0x100) {\n"),
