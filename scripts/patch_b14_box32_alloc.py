@@ -241,6 +241,8 @@ JOBS = [
         ("GO(__freelocale, vEA)\n", "GO2(__freelocale, vEA, my32_freelocale)\n"),
         ("GOW(uselocale, aEa)\n", "GOM(uselocale, aEa)\n"),
         ("GO(__uselocale, aEa)\n", "GO2(__uselocale, aEa, my32_uselocale)\n"),
+        # freeifaddrs 配套 my32 深拷贝链（直通 musl free 会崩 box32 块）
+        ("GO(freeifaddrs, vEp)\n", "GO2(freeifaddrs, vEp, my32_freeifaddrs)\n"),
     ]),
     ("src/wrapped32/wrappedlibc.c", [
         (MY32_MALLOC_OLD, MY32_MALLOC_NEW),
@@ -446,6 +448,89 @@ JOBS = [
          "    info->dli_sname = to_ptrv(B14_S32(sname));\n"
          "    #undef B14_S32\n"
          "    #undef B14_P32\n"),
+    ]),
+    # B-14: getifaddrs host 链（>4G）深拷贝到 box32 堆，防 to_ptrv TEST_ABORT；
+    # 原实现 getifaddrs((void*)res) 直接把 host 指针写 guest 出参且就地窄化，字段
+    # 全是 host 指针。改为：节点整块紧凑数组（orig 藏首节点尾，同 getaddrinfo 先例），
+    # name/sockaddr/ifa_data 各自 box32 拷贝；配套 my32_freeifaddrs 成对释放。
+    ("src/libtools/libc_net32.c", [
+        ("EXPORT int my32_getifaddrs(x64emu_t* emu, void** res)\n"
+         "{\n"
+         "    int ret = getifaddrs((void*)res);\n"
+         "    if(!ret) {\n"
+         "        // convert the chained list of ifaddrs to i386 (narrowed) in place\n"
+         "        struct ifaddrs* p = *res;\n"
+         "        while(p) {\n"
+         "            struct i386_ifaddrs *i386 = (struct i386_ifaddrs*)p;\n"
+         "            struct ifaddrs* next = p->ifa_next;\n"
+         "            i386->ifa_next = to_ptrv(p->ifa_next);\n"
+         "            i386->ifa_name = to_cstring(p->ifa_name);\n"
+         "            i386->ifa_flags = p->ifa_flags;\n"
+         "            i386->ifa_addr = to_ptrv(p->ifa_addr);\n"
+         "            i386->ifa_netmask = to_ptrv(p->ifa_netmask);\n"
+         "            i386->ifa_ifu = (i386->ifa_flags&IFF_BROADCAST)?to_ptrv(p->ifa_broadaddr):to_ptrv(p->ifa_dstaddr);\n"
+         "            i386->ifa_data = to_ptrv(p->ifa_data);\n"
+         "            p = next;\n"
+         "        }\n"
+         "    }\n"
+         "    return ret;\n"
+         "}\n",
+         "// B-14: host 侧任意小缓冲拷入 box32 堆（>4G 防 abort；长度按 usable 封顶）\n"
+         "static ptr_t b14_ifa_blob(void* s)\n"
+         "{\n"
+         "    if(!s) return 0;\n"
+         "    size_t n = box32_malloc_usable_size(s);\n"
+         "    if(!n) n = 128;\n"
+         "    if(n > 512) n = 512;\n"
+         "    void* d = box32_calloc(1, n);\n"
+         "    memcpy(d, s, n);\n"
+         "    return to_ptrv(d);\n"
+         "}\n"
+         "EXPORT int my32_getifaddrs(x64emu_t* emu, void** res)\n"
+         "{\n"
+         "    struct ifaddrs* host = NULL;\n"
+         "    int ret = getifaddrs(&host);\n"
+         "    if(ret || !host) { *res = 0; return ret; }\n"
+         "    int idx = 0;\n"
+         "    for(struct ifaddrs* q = host; q; q = q->ifa_next) ++idx;\n"
+         "    // 布局：[i386_0][void* orig][i386_1..]（同 my32_getaddrinfo 先例）\n"
+         "    struct i386_ifaddrs* r = actual_malloc(idx*sizeof(struct i386_ifaddrs)+sizeof(void*));\n"
+         "    char* cur = (char*)r;\n"
+         "    *(void**)(cur + sizeof(struct i386_ifaddrs)) = host;\n"
+         "    char* nxt = cur + sizeof(struct i386_ifaddrs) + sizeof(void*);\n"
+         "    for(struct ifaddrs* p = host; p; p = p->ifa_next) {\n"
+         "        struct i386_ifaddrs* d = (struct i386_ifaddrs*)cur;\n"
+         "        d->ifa_next = p->ifa_next ? (ptr_t)(uintptr_t)nxt : 0;\n"
+         "        d->ifa_name = box32_strdup(p->ifa_name);\n"
+         "        d->ifa_flags = p->ifa_flags;\n"
+         "        d->ifa_addr = b14_ifa_blob(p->ifa_addr);\n"
+         "        d->ifa_netmask = b14_ifa_blob(p->ifa_netmask);\n"
+         "        d->ifa_ifu = b14_ifa_blob((p->ifa_flags&IFF_BROADCAST)?p->ifa_broadaddr:p->ifa_dstaddr);\n"
+         "        d->ifa_data = b14_ifa_blob(p->ifa_data);\n"
+         "        cur = nxt;\n"
+         "        nxt = cur + sizeof(struct i386_ifaddrs);\n"
+         "    }\n"
+         "    *res = r;\n"
+         "    freeifaddrs(host);\n"
+         "    return 0;\n"
+         "}\n"
+         "EXPORT void my32_freeifaddrs(x64emu_t* emu, void* a)\n"
+         "{\n"
+         "    if(!a) return;\n"
+         "    void* orig = *(void**)((char*)a + sizeof(struct i386_ifaddrs));\n"
+         "    struct i386_ifaddrs* d = (struct i386_ifaddrs*)a;\n"
+         "    while(d) {\n"
+         "        struct i386_ifaddrs* nx = d->ifa_next ? (struct i386_ifaddrs*)(uintptr_t)d->ifa_next : NULL;\n"
+         "        box32_free(from_ptrv(d->ifa_name));\n"
+         "        box32_free(from_ptrv(d->ifa_addr));\n"
+         "        box32_free(from_ptrv(d->ifa_netmask));\n"
+         "        box32_free(from_ptrv(d->ifa_ifu));\n"
+         "        box32_free(from_ptrv(d->ifa_data));\n"
+         "        d = nx;\n"
+         "    }\n"
+         "    if(orig) freeifaddrs(orig);\n"
+         "    actual_free(a);\n"
+         "}\n"),
     ]),
 ]
 
