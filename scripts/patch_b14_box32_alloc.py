@@ -200,6 +200,11 @@ REALLOCARRAY_NEW = """EXPORT void* my32_reallocarray(void* ptr, size_t nmemb, si
 JOBS = [
     ("src/wrapped32/wrappedlib_init32.h", [
         (EXTERN_ANCHOR, EXTERN_NEW),
+        # B-14 根因：32 位 symbol2map 注册即 resolved=1 → 查询跳过建桥/alternate →
+        # 返回 raw my32 地址进 GOT → 解释器执行 host 地址 → CheckExec SIGSEGV。
+        # 置 0 后首查询走 AddCheckBridge（建桥 f=my32）+ addAlternate(raw→桥)。
+        ("        kh_value(lib->w.symbol2map, k).resolved = 1;\n",
+         "        kh_value(lib->w.symbol2map, k).resolved = 0; // B-14: 首查询时建桥+addAlternate\n"),
     ]),
     ("src/wrapped32/wrappedlibc_private.h", [
         # 分配族 GOW/GO → GOM（挂 my32_*）
