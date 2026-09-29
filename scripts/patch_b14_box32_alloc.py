@@ -259,6 +259,24 @@ JOBS = [
          "    qsort_r(base, nmemb, size, (__compar_d_fn_t)my32_compare_r_cb, &args);\n"
          "    printf_log(LOG_INFO, \"B14QDONE base=%p\\n\", base); fflush(stderr);\n"
          "}\nEXPORT void my32_qsort_r"),
+        # B-14: vasprintf 族 host 缓冲 >4G（brk/宿主映射）→ to_ptrv 触发 TEST_ABORT；
+        # 拷入 box32 堆后释放原缓冲，四出参点统一走 b14_chk_out
+        ("EXPORT int my32_asprintf(x64emu_t* emu, ptr_t* buff, void * fmt, void * b) {\n",
+         "// B-14: >4G host 缓冲拷入 box32 堆再 to_ptrv（防 box64_abort）\n"
+         "static ptr_t b14_chk_out(char* p)\n"
+         "{\n"
+         "    if((uintptr_t)p >> 32) {\n"
+         "        char* q = box32_strdup(p);\n"
+         "        free(p);\n"
+         "        return to_ptrv(q);\n"
+         "    }\n"
+         "    return to_ptrv(p);\n"
+         "}\n"
+         "EXPORT int my32_asprintf(x64emu_t* emu, ptr_t* buff, void * fmt, void * b) {\n"),
+        ("    *buff = to_ptrv(res);\n", "    *buff = b14_chk_out(res);\n"),
+        ("    *strp = to_ptrv(res);\n", "    *strp = b14_chk_out(res);\n"),
+        ("    *strp = to_ptrv(p);\n", "    *strp = b14_chk_out(p);\n"),
+        ("    *result_ptr = to_ptrv(p);\n", "    *result_ptr = b14_chk_out(p);\n"),
     ]),
     ("src/wrapped/wrappedlibc.c", [
         (MALLOC_OLD, MALLOC_NEW),
