@@ -501,7 +501,7 @@ JOBS = [
          "    for(struct ifaddrs* p = host; p; p = p->ifa_next) {\n"
          "        struct i386_ifaddrs* d = (struct i386_ifaddrs*)cur;\n"
          "        d->ifa_next = p->ifa_next ? (ptr_t)(uintptr_t)nxt : 0;\n"
-         "        d->ifa_name = box32_strdup(p->ifa_name);\n"
+         "        d->ifa_name = to_ptrv(box32_strdup(p->ifa_name));\n"
          "        d->ifa_flags = p->ifa_flags;\n"
          "        d->ifa_addr = b14_ifa_blob(p->ifa_addr);\n"
          "        d->ifa_netmask = b14_ifa_blob(p->ifa_netmask);\n"
