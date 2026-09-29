@@ -372,6 +372,26 @@ JOBS = [
          "    }\n"
          "    if((uintptr_t)p < 0x100) {\n"),
     ]),
+    # B-14: STATICBUILD 下 box_malloc_usable_size=NULL（dlsym 裁剪），
+    # 非 custom 地址 call NULL → SIGSEGV @0；防 NULL 返回 0
+    ("src/mallochook.c", [
+        ("size_t box32_malloc_usable_size(void* p)\n"
+         "{\n"
+         "    if(isCustomAddr(p))\n"
+         "        return customGetUsableSize(p);\n"
+         "    else\n"
+         "        return box_malloc_usable_size(p);\n"
+         "}\n",
+         "size_t box32_malloc_usable_size(void* p)\n"
+         "{\n"
+         "    if(isCustomAddr(p))\n"
+         "        return customGetUsableSize(p);\n"
+         "    else if(box_malloc_usable_size)\n"
+         "        return box_malloc_usable_size(p);\n"
+         "    else\n"
+         "        return 0; // B-14: STATICBUILD 下该函数指针为 NULL，防 call 0\n"
+         "}\n"),
+    ]),
 ]
 
 
