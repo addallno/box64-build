@@ -514,7 +514,7 @@ JOBS = [
          "        nxt = cur + sizeof(struct i386_ifaddrs);\n"
          "    }\n"
          "    *res = r;\n"
-         "    freeifaddrs(host);\n"
+         "    // host 链存 orig，由 my32_freeifaddrs 成对释放（此处不 free，防 double free）\n"
          "    return 0;\n"
          "}\n"
          "EXPORT void my32_freeifaddrs(x64emu_t* emu, void* a)\n"
