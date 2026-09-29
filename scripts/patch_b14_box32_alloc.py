@@ -245,6 +245,13 @@ JOBS = [
     ("src/wrapped32/wrappedlibc.c", [
         (MY32_MALLOC_OLD, MY32_MALLOC_NEW),
         (REALLOCARRAY_OLD, REALLOCARRAY_NEW),
+        # B-14 诊断：qsort 链打点（compar 回调参数错位 vs 数组含 NULL 的定位）
+        ("static int my32_compare_r_cb(void* a, void* b, compare_r_t* arg)\n{\n",
+         "static int my32_compare_r_cb(void* a, void* b, compare_r_t* arg)\n{\n"
+         "    { static int n=0; if(n<5) { ++n; printf_log(LOG_INFO, \"B14QCMP #%d a=%p b=%p\\n\", n, a, b); } }\n"),
+        ("EXPORT void my32_qsort(x64emu_t* emu, void* base, size_t nmemb, size_t size, void* fnc)\n{\n",
+         "EXPORT void my32_qsort(x64emu_t* emu, void* base, size_t nmemb, size_t size, void* fnc)\n{\n"
+         "    printf_log(LOG_INFO, \"B14QSORT base=%p n=%d sz=%d f=%p\\n\", base, (int)nmemb, (int)size, fnc);\n"),
     ]),
     ("src/wrapped/wrappedlibc.c", [
         (MALLOC_OLD, MALLOC_NEW),
