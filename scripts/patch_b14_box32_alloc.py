@@ -171,7 +171,6 @@ extern void* box32_get_fake_locale(void);
 EXPORT void* my32_newlocale(x64emu_t* emu, int mask, const char* name, void* out)
 {
     (void)emu; (void)mask; (void)name; (void)out;
-    printf_log(LOG_INFO, "B14STUB newlocale\\n"); // B-14 诊断：确认桥 native 目标=stub
     return box32_get_fake_locale();
 }
 EXPORT void* my32_duplocale(x64emu_t* emu, void* loc)
@@ -248,20 +247,6 @@ JOBS = [
     ("src/wrapped32/wrappedlibc.c", [
         (MY32_MALLOC_OLD, MY32_MALLOC_NEW),
         (REALLOCARRAY_OLD, REALLOCARRAY_NEW),
-        # B-14 诊断：qsort 链打点（compar 回调参数错位 vs 数组含 NULL 的定位）
-        ("static int my32_compare_r_cb(void* a, void* b, compare_r_t* arg)\n{\n",
-         "static int my32_compare_r_cb(void* a, void* b, compare_r_t* arg)\n{\n"
-         "    { static int n=0; if(n<5) { ++n; printf_log(LOG_INFO, \"B14QCMP #%d a=%p *a=%p b=%p *b=%p\\n\", n, a, *(void**)a, b, *(void**)b); fflush(stderr); } }\n"),
-        ("EXPORT void my32_qsort(x64emu_t* emu, void* base, size_t nmemb, size_t size, void* fnc)\n{\n",
-         "EXPORT void my32_qsort(x64emu_t* emu, void* base, size_t nmemb, size_t size, void* fnc)\n{\n"
-         "    printf_log(LOG_INFO, \"B14QSORT base=%p n=%d sz=%d f=%p\\n\", base, (int)nmemb, (int)size, fnc);\n"
-         "    { uint32_t* p=(uint32_t*)base; int i, nz=0; for(i=0;i<(int)nmemb;++i) if(p[i]) ++nz;\n"
-         "      printf_log(LOG_INFO, \"B14QDUMP nz=%d/%d e0=%08x e1=%08x e2=%08x e59=%08x\\n\", nz, (int)nmemb, p[0], p[1], p[2], p[(int)nmemb-1]); fflush(stderr); }\n"),
-        # B14QDONE：qsort_r 是否完整返回（区分崩在 qsort 内 vs 后续调用）
-        ("    qsort_r(base, nmemb, size, (__compar_d_fn_t)my32_compare_r_cb, &args);\n}\nEXPORT void my32_qsort_r",
-         "    qsort_r(base, nmemb, size, (__compar_d_fn_t)my32_compare_r_cb, &args);\n"
-         "    printf_log(LOG_INFO, \"B14QDONE base=%p\\n\", base); fflush(stderr);\n"
-         "}\nEXPORT void my32_qsort_r"),
         # B-14: vasprintf 族 host 缓冲 >4G（brk/宿主映射）→ to_ptrv 触发 TEST_ABORT；
         # 拷入 box32 堆后释放原缓冲，四出参点统一走 b14_chk_out
         ("EXPORT int my32_asprintf(x64emu_t* emu, ptr_t* buff, void * fmt, void * b) {\n",
@@ -289,50 +274,6 @@ JOBS = [
     ("src/librarian/library.c", [
         ('#include "library_inner.h"\n',
          '#include "library_inner.h"\n#include "alternate.h" // B-14: resolve 后注册 raw→桥 alternate\n'),
-        # WrappedLib_GetGlobal 入口实证（locale 过滤）
-        ("    if (!getSymbolInMaps(lib, name, 1, &addr, &size, &wk, *version, *vername, local, *veropt)) {\n"
-         "        return 0;\n"
-         "    }\n",
-         "    int dbg_get = getSymbolInMaps(lib, name, 1, &addr, &size, &wk, *version, *vername, local, *veropt);\n"
-         "    if(strstr(name, \"locale\")) printf_log(LOG_INFO, \"B14GG lib=%s name=%s get=%d addr=%p wk=%d\\n\", lib->name, name, dbg_get, (void*)addr, wk);\n"
-         "    if (!dbg_get) {\n"
-         "        return 0;\n"
-         "    }\n"),
-        # getSymbolInSymbolMaps 入口实证
-        ("    const khint_t hash = kh_hash(symbolmap, name);\n"
-         "    void* symbol;\n",
-         "    const khint_t hash = kh_hash(symbolmap, name);\n"
-         "    void* symbol;\n"
-         "    if(strstr(name, \"locale\")) printf_log(LOG_INFO, \"B14SIM in name=%s noweak=%d\\n\", name, noweak);\n"),
-        # symbol2map kh 命中与否实证
-        ("    k = kh_get_with_hash(symbol2map, lib->w.symbol2map, name, hash);\n",
-         "    k = kh_get_with_hash(symbol2map, lib->w.symbol2map, name, hash);\n"
-         "    if(strstr(name, \"locale\")) printf_log(LOG_INFO, \"B14s2kh lib=%s name=%s k=%d end=%d\\n\", lib->name, name, (int)k, (int)kh_end(lib->w.symbol2map));\n"),
-        # symbol2map 命中后 weak/resolved 实证
-        ("    if (k!=kh_end(lib->w.symbol2map))  {\n"
-         "        symbol2_t *s = &kh_value(lib->w.symbol2map, k);\n",
-         "    if (k!=kh_end(lib->w.symbol2map))  {\n"
-         "        symbol2_t *s = &kh_value(lib->w.symbol2map, k);\n"
-         "        if(strstr(name, \"locale\")) printf_log(LOG_INFO, \"B14s2w name=%s weak=%d resolved=%d addr=%p noweak=%d\\n\", name, s->weak, s->resolved, (void*)s->addr, noweak);\n"),
-        # 族级命中实证：datamap/stsymbolmap/symbolmap/wsymbolmap
-        ("    khint_t k = kh_get(datamap, lib->w.datamap, name);\n"
-         "    if (k!=kh_end(lib->w.datamap)) {\n",
-         "    khint_t k = kh_get(datamap, lib->w.datamap, name);\n"
-         "    if (k!=kh_end(lib->w.datamap)) {\n"
-         "        if(strstr(name, \"locale\")) printf_log(LOG_INFO, \"B14hit data name=%s lib=%s\\n\", name, lib->name);\n"),
-        ("    k = kh_get_with_hash(symbolmap, lib->w.stsymbolmap, name, hash);\n"
-         "    if (k!=kh_end(lib->w.stsymbolmap)) {\n",
-         "    k = kh_get_with_hash(symbolmap, lib->w.stsymbolmap, name, hash);\n"
-         "    if (k!=kh_end(lib->w.stsymbolmap)) {\n"
-         "        if(strstr(name, \"locale\")) printf_log(LOG_INFO, \"B14hit st name=%s lib=%s\\n\", name, lib->name);\n"),
-        ("    k = kh_get_with_hash(symbolmap, lib->w.symbolmap, name, hash);\n"
-         "    if (k!=kh_end(lib->w.symbolmap)) {\n",
-         "    k = kh_get_with_hash(symbolmap, lib->w.symbolmap, name, hash);\n"
-         "    if (k!=kh_end(lib->w.symbolmap)) {\n"
-         "        if(strstr(name, \"locale\")) printf_log(LOG_INFO, \"B14hit s name=%s lib=%s\\n\", name, lib->name);\n"),
-        ("        k = kh_get_with_hash(symbolmap, lib->w.wsymbolmap, name, hash);\n",
-         "        k = kh_get_with_hash(symbolmap, lib->w.wsymbolmap, name, hash);\n"
-         "        if(strstr(name, \"locale\")) printf_log(LOG_INFO, \"B14hit ws k=%d end=%d name=%s lib=%s\\n\", (int)k, (int)kh_end(lib->w.wsymbolmap), name, lib->name);\n"),
         # mysymbolmap：块内 s2 可见，resolve 后 s->addr=桥
         ("                s->resolved = 1;\n"
          "            }\n"
@@ -345,7 +286,6 @@ JOBS = [
          "    // check in stsymbolmap (return struct...)\n",
          "                s->resolved = 1;\n"
          "            }\n"
-         "            printf_log(LOG_INFO, \"B14DBG my sym=%s symbol=%p addr=%p s2=%d\\n\", name, symbol, (void*)s->addr, s2?1:0);\n"
          "            if(s->addr && (void*)s->addr != symbol)\n"
          "                addAlternate(symbol, (void*)s->addr);\n"
          "        }\n"
@@ -368,7 +308,6 @@ JOBS = [
          "                s->addr = AddCheckBridge(lib->w.bridge, s->w, symbol, 0, name);\n"
          "                s->resolved = 1;\n"
          "            }\n"
-         "            printf_log(LOG_INFO, \"B14DBG wmy sym=%s symbol=%p addr=%p s2=%d\\n\", name, symbol, (void*)s->addr, s2?1:0);\n"
          "            if(s->addr && (void*)s->addr != symbol)\n"
          "                addAlternate(symbol, (void*)s->addr);\n"
          "            }\n"
@@ -384,7 +323,6 @@ JOBS = [
          "            *weak = s->weak;\n",
          "                s->addr = AddCheckBridge(lib->w.bridge, s->w, symbol, 0, name);\n"
          "                s->resolved = 1;\n"
-         "                printf_log(LOG_INFO, \"B14DBG s2map sym=%s symbol=%p addr=%p\\n\", name, symbol, (void*)s->addr);\n"
          "                if(s->addr && (void*)s->addr != symbol)\n"
          "                    addAlternate(symbol, (void*)s->addr);\n"
          "            }\n"
@@ -515,7 +453,6 @@ JOBS = [
          "        nxt = cur + sizeof(struct i386_ifaddrs);\n"
          "    }\n"
          "    *res = r;\n"
-         "    printf_log(LOG_INFO, \"B14IFAGET r=%p idx=%d host=%p\\n\", r, idx, host); fflush(stderr);\n"
          "    // host 链存 orig，由 my32_freeifaddrs 成对释放（此处不 free，防 double free）\n"
          "    return 0;\n"
          "}\n"
@@ -524,10 +461,6 @@ JOBS = [
          "    if(!a) return;\n"
          "    void* orig = *(void**)((char*)a + sizeof(struct i386_ifaddrs));\n"
          "    struct i386_ifaddrs* d = (struct i386_ifaddrs*)a;\n"
-         "    printf_log(LOG_INFO, \"B14FIFA a=%p orig=%p name=%p addr=%p net=%p ifu=%p data=%p next=%08x\\n\",\n"
-         "        a, orig, (void*)(uintptr_t)d->ifa_name, (void*)(uintptr_t)d->ifa_addr,\n"
-         "        (void*)(uintptr_t)d->ifa_netmask, (void*)(uintptr_t)d->ifa_ifu,\n"
-         "        (void*)(uintptr_t)d->ifa_data, d->ifa_next); fflush(stderr);\n"
          "    while(d) {\n"
          "        struct i386_ifaddrs* nx = d->ifa_next ? (struct i386_ifaddrs*)(uintptr_t)d->ifa_next : NULL;\n"
          "        box32_free(from_ptrv(d->ifa_name));\n"
