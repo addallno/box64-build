@@ -242,7 +242,8 @@ JOBS = [
         ("GOW(uselocale, aEa)\n", "GOM(uselocale, aEa)\n"),
         ("GO(__uselocale, aEa)\n", "GO2(__uselocale, aEa, my32_uselocale)\n"),
         # freeifaddrs 配套 my32 深拷贝链（直通 musl free 会崩 box32 块）
-        ("GO(freeifaddrs, vEp)\n", "GO2(freeifaddrs, vEp, my32_freeifaddrs)\n"),
+        # vEEp=fn(emu,ptr) 与 my32_freeifaddrs(emu,a) 签名匹配（vEp 单参会错位，a 残留=fcn）
+        ("GO(freeifaddrs, vEp)\n", "GO2(freeifaddrs, vEEp, my32_freeifaddrs)\n"),
     ]),
     ("src/wrapped32/wrappedlibc.c", [
         (MY32_MALLOC_OLD, MY32_MALLOC_NEW),
