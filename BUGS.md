@@ -143,7 +143,7 @@ musl 静态运行时 `dlopen(NULL)/dlsym(任意 handle)` 全部返回 0（`Dynam
 - **subagent 审查未修项（报告1）**：P1-5 my_pthread_once 10ms 强制放行；P1-6 guest sigset 不转换（signalfd/pthread_sigmask 直通）；P2-9 pthread 静默丢 guest 栈 + SetFS 注释；P2-10 TERMUX 分支 attr 假成功。
 - 目标机 CPU：**Cortex-A53×8**（无 dotprod/fp16/atomics/rcpc）→ A1 优化按 `-march=armv8-a+crypto+crc -mtune=cortex-a53` 落地，禁用 armv8.2-a 系（SIGILL）。
 
-## B-14 box32 32 位 steamcmd 启动即 SIGABRT（2026-09-29 修复中）
+## B-14 box32 32 位 steamcmd 启动即 SIGABRT（已修复 ✅ 2026-09-30）
 - **现象**：`/root/steam/linux32/steamcmd`（i386 动态链接）经 box32 加载，wrapped libc/ld 装完第一次 `malloc(8)` 即 `Warning, pointer 0x2000001880 is not a 32bits value` → `box64_abort` → SIGABRT rc=134（首次 LOG=1 轮为 0x7f9e833da0）。
 - **根因（v2 定论，v1 修复无效的原因）**：上游 box32 依赖 mallochook.c 的 EXPORT interpose 层（`#ifndef STATICBUILD`，Exterminate 策略）把裸 malloc/calloc/free 重定向到 `actual_*`（box32 时经 `box32_*` 落 MAP_32BIT 32 位堆）；静态构建裁掉该 EXPORT 区后整条链断掉，**断点在 `my32_*` 层**：
   1. 32 表 GOM 展开为 `&my32_##N`（`wrappedlib_init32.h:113`），**不是** my_*；
@@ -152,5 +152,18 @@ musl 静态运行时 `dlopen(NULL)/dlsym(任意 handle)` 全部返回 0（`Dynam
   4. proot 下宿主堆在 0x2000000000 / 0x7f...（>4GB），`wrapper32.c pEL_32` 对返回值 `to_ptrv`（box32.h `TEST32/TEST_ABORT`）发现高位即 abort。
   **v1（commit 89660fa）只改了 64 位 `wrapped/wrappedlibc.c my_malloc`——64 表 `GO(malloc)` 直通 &malloc，my_malloc 无人引用=死代码，故 v1 部署后复测仍 SIGABRT**。v1 唯一生效部分=32 表 GOW→GOM（把崩溃从宿主直通挪到 my32_malloc 裸 calloc，同一结局）。
 - **修复 v2** `scripts/patch_b14_box32_alloc.py`（挂链 joinlog 后）：① 32 表分配族 GOW/GO→GOM + 9 个 GO2 目标改 my32_* + `__strdup/__strndup`→GO2 my32_*（v2 一步到位）；② `wrappedlib_init32.h` my64_decls 补 extern（v1 原样，链内 isnanf→gen-libc-stubs 已建块，CI 日志实证顺序：isnanf(内部 gen)→b14→build.sh:329 gen 幂等）；③ **`wrapped32/wrappedlibc.c` 新增 my32 全族 strong**（覆盖 weak 桩）：my32_malloc=actual_calloc、my32_calloc/realloc/free/memalign、my32_strdup(box64_is32bits?box32_strdup:box_strdup)、my32_valloc/pvalloc(actual_memalign+页进位)、my32_posix_memalign(ENOMEM+写\*p)、my32_strndup(strnlen+actual_calloc)、my32_malloc_usable_size 与 64 位 my_malloc_usable_size 显式分支（`box64_is32bits?box32_malloc_usable_size:malloc_usable_size`，**绕开 STATICBUILD 下无声明的 box_malloc_usable_size 函数指针**——mallochook:140 静态下恒 NULL）；my32_reallocarray body→actual_realloc；④ 64 位 `wrapped/wrappedlibc.c` my_malloc→actual_calloc + my_* 族（v1 原样保留，死代码零风险）。
-- **验证状态**：本地全链重放（SKIP_FTS=1 + MUSL_SYMS_FILE=/tmp/musl-syms.txt 由本地 musl 工具链 nm libc.a 生成 1939 符号）11 patch 全 OK；b14-v2 应用 OK + 幂等重跑 OK；语法检查 `box_malloc_usable_size` warning 归零，64 位 error 49=基线 48+1（+1 为 isnanf patch 的 `PTHREAD_RECURSIVE_MUTEX_INITIALIZER` musl 宏写法，host glibc 噪音，musl 工具链无此问题）。待 CI → 远端 q57 复测。
+- **验证状态**：本地全链重放（SKIP_FTS=1 + MUSL_SYMS_FILE=/tmp/musl-syms.txt 由本地 musl 工具链 nm libc.a 生成 1939 符号）11 patch 全 OK；b14-v2 应用 OK + 幂等重跑 OK；语法检查 `box_malloc_usable_size` warning 归零，64 位 error 49=基线 48+1（+1 为 isnanf patch 的 `PTHREAD_RECURSIVE_MUTEX_INITIALIZER` musl 宏写法，host glibc 噪音，musl 工具链无此问题）。
+- **最终修复链（v2 之后的连环修复，全部 CI 通过+远端部署验证）**：
+  1. 5070314：`malloc_usable_size` 静态下函数指针恒 NULL → 直通 musl 真实现；
+  2. da121c3：vasprintf 族 host 缓冲 >4G → `b14_chk_out` 拷入 box32 堆；
+  3. 0087e96：`to_ptrv` 修（TEST_ABORT 友好化）；
+  4. 3de8cf7：`b14_ifa_blob` 不可探块内指针 usable（musl free.c get_meta abort）→ 按 sa_family 定长拷贝；
+  5. f7776b8：去 `my32_getifaddrs` 内提前 `freeifaddrs(host)`（与 orig 双重释放）；
+  6. ca57474：B14IFAGET/B14FIFA 打点定位到 `a≠r`；
+  7. **7a5d856（根因）**：`GO2(freeifaddrs, vEp, my32_freeifaddrs)` 单参 wrapper 调两参函数 → emu 吃掉 guest 参数、`a` 残留为函数自身地址 0x3499a3f0 → 改 `GO2(freeifaddrs, vEEp, my32_freeifaddrs)`（对齐 `GOM(freeaddrinfo, vEEp)` 先例）；
+  8. 0dd432c：清理全部 B14 诊断打点（保留 addAlternate/功能修复，-67 行）。
+- **最终验证（2026-09-30，md5 3dffd9eb）**：
+  - 32 位 q57：rc=0 ui=1 ok=5，SIGSEGV=0 SIGABRT=0，not-a-32bits=0，B14 打点输出=0；steamcmd `login addallno` OK → Unloading → 自然退出；
+  - 64 位 q56_join 单轮：rc=0 ui=1 ok=5，SIG*=0；
+  - 64 位 q53 十轮压力：**LOGIN=10/10**，trig=0（无 FillBlock 崩溃）。
 - 同日 subagent 三报告结论：B-04 断言→SIGTRAP 根因为 **proot 使 TracerPid≠0 → steam IsDebuggerPresent 判真 → int3 必死**，零代码缓解 `BOX64_IGNOREINT3=1`；B-06 刷屏已随 B-13（BAD_PKILL）修复；patch 链加固 Top8（syscalls 假幂等/jmptbl 跨文件哨兵/stamp 转义锚/jmptbl 报错无锚文/joinlog include 相邻锚等）待后续落地。
