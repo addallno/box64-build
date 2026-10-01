@@ -174,6 +174,12 @@ musl 静态运行时 `dlopen(NULL)/dlsym(任意 handle)` 全部返回 0（`Dynam
 - **修复（e557268，`patch_b14_box32_alloc.py` 第二个 wrappedlibc.c JOBS 条目，7 组锚替换）**：TLS 缓冲 `b14_sd_buf`（box32 堆 <4GB）供 4 回调复用；compare 系解引用 qsort 槽（musl compar 收二级槽地址，alphasort 二级原型直作 compar 为铁证）后深拷入缓冲，compare64 构造 guest 可读二级槽；返回路径整体改深拷贝（每 dirent box32_calloc 独立块 + ptr_t 数组），删原 to_ptrv/inplace shrink。
 - **验证**：本地语法 248err=基线零新增；CI 36863383961 产物 md5=1adc6f0d 已部署（~/box64-patched 等三处）；q57 六轮 rc=0/ui=1/ok=5，`not-a-32bits=0`、SIG*=0。
 
+### B-14 附加：SIGSEGV@0x34a6e1b8（calloc 尾声栈损坏，已随 e557268 消除 ✅ 2026-10-01）
+- **现象**：B-14 时代 18 轮压力中 3 次 `SIGSEGV @0x34a6e1b8`，`for accessing 0x742e7300000010`（SEGV_MAPERR），`x64pc=0x300060b3/"box64/free+0x13"`，前有 `Failed writing minidump`（steam crashhandler 先输出）；同时段另有 2 次 `SIGABRT @0x34a8fab4`（tdelete 尾声）/`@0x34a7c7cc`（ptsname_r），合计 5/18≈28% 偶发。
+- **定位**：`addr2line -f -e ci-out/b14fifa2/box64-aarch64-musl.debug 0x34a6e1b8` = **`__libc_calloc+0x68`**（反汇编：calloc epilogue `ldp x20,x21,[sp,#16]` 0x34a6e1b8 → ret 0x34a6e1c0；native `free` 0x34a6e144 只是 `b __libc_free`）。fault 地址=sp+16 → **native sp=0x742e7300000000 被污染**（高 32 位 0x742e73=ASCII `t.s` 如 `.steam` 路径串，低 32=0x10）。SIGABRT 的 `si_addr=0x27df00007af5` 非垃圾——**siginfo union**（si_pid=31477|si_uid=10207 Termux）。
+- **模型**：scandir/qsort 排序链上（tdelete=树删除同帧模式）native 栈被字符串覆盖 → 后续任意函数 epilogue `ldp [sp,#16]` 崩（calloc 只是运气点）；`box64/free+0x13` 是 x64pc 卡在 guest free 桥（FindNearestSymbolName 走 bridge 签名分支）。
+- **验证消除**：e557268（scandir 回调/结果深拷贝 + 去 to_ptrv）部署后 **18 轮 + 6 轮 = 24 轮 q57 全 rc=0**，SIGSEGV=0 / SIGABRT=0 / not-a-32bits=0（b14fifa2 时代基线 28% → 0%）。判定与 B-14 scandir SIGABRT 同源：`to_ptrv(list)/list[i]/回调直传`在栈/静态缓冲传参与 >4G 分配间随机触发，深拷贝后整链根除。
+
 ### B-12 附加：P12GUARD 守卫日志已移除（7f0233e）
 - patch_munmap_guard.py 删 fprintf 日志行，**保留 `box_guest_mapping_flag()` 拦截逻辑本身**（拆 custommem 映射的防崩溃能力不变）；已随后续产物（含 e557268）部署，q57 回归覆盖无 P12GUARD 输出。
 
