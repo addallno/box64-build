@@ -93,3 +93,17 @@ STATICBUILD box64 下运行 steamcmd 时，steamclient.so 的 robust futex 初�
 
 - box64 静态版仅内置少量 wrapped 库（libc/libm/libpthread），图形/音频等 x86 库需通过 `BOX64_LD_LIBRARY_PATH` 指向 x64lib。
 - BOX32 模式运行时需把 32 位 x86 库路径放入 `BOX32_LD_LIBRARY_PATH`（从 box64 仓库 `x86lib/` 获取）。
+
+## BOX64_PATHMAP 路径前缀映射
+
+通用 GNU 程序适配：把 guest 程序发出的路径前缀重写为宿主真实前缀（例：guest 写 `/tmp/x` 实际落到别处）。
+
+```sh
+# 语法：BOX64_PATHMAP="/from:/to,/from2:/to2"（逗号分隔，最多 8 条）
+BOX64_PATHMAP=/tmp:/data/local/tmp ./x86_program
+```
+
+- **匹配**：前缀 + 边界（`/tmp` 命中 `/tmp/a` 不命中 `/tmpx`）；多条取最长前缀；每条路径只映射一次。
+- **覆盖**：syscall 直调（static 程序、box32 int 0x80）与 libc wrapper（open/stat/execve/fopen/renameat 等 15 个）双层。
+- **约束**：勿映射 `/proc`；规则勿链式；env 由子进程继承，无需额外配置。
+- 实现见 `scripts/patch_pathmap.py`（13/13 patch 链），BUGS.md「BOX64_PATHMAP 路径前缀映射」章。

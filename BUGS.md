@@ -194,3 +194,15 @@ musl 静态运行时 `dlopen(NULL)/dlsym(任意 handle)` 全部返回 0（`Dynam
 5. **reallocarray/pvalloc 溢出**：`nmemb*size`、`size+page-1` 未查溢出（E 大值），原上游行为保留，未修。
 6. **fake_locale 地址前提**：box32.c 静态数组依赖 static 非 PIE 加载基址 <4GB；若改动态构建 to_locale 特例仍会 to_ptrv 超限 abort。当前 static=true 构建不触发。
 7. **GOW→GOM 丢 weak 属性**：分配族改 GOM 后 weak 绑定语义变化——static 构建全部强绑定 `&my32_*`，无实际差异。
+
+## 功能：BOX64_PATHMAP 路径前缀映射（patch_pathmap.py，第 13 个 patch ✅ 2026-10-02）
+
+- **需求**：通用 GNU 程序适配（m0111"我甚至无法使用它运行ping, 我不希望他是一个专门针对steamcmd运行的软件"）——guest 路径与宿主实际路径前缀不一致时（如 guest `/tmp` 要落到宿主别处）单点重写。
+- **env**：`BOX64_PATHMAP="/from:/to,/from2:/to2"`（逗号分隔最多 8 条；前缀匹配+边界检查 path[l]==0||'/'；最长前缀优先；**单次映射**防链式双改；未命中返回原指针；命中返回 __thread 缓冲 2048B，超长降级返原路径；from 自动去尾斜杠与首尾空格；子进程经 env 继承）。
+- **实现（43edcab，双层注入）**：
+  - **layer1 syscall 路**：五个分发入口各插一段——按 s 查 `box64_pathmask64/32`（逻辑参数位掩码，x64 表 39 项 / i386 表 39 项）后重写对应寄存器，下游 wrap 直透与 switch case 自动生效。`x64Syscall_linux`（号 R_EAX，参数 R_RDI/R_RSI/R_RDX/**R_R10**/R_R8/R_R9）、`my_syscall`（libc syscall()：号 R_EDI，参数**从 R_RSI 起** R_RSI/R_RDX/R_RCX/R_R8/R_R9 无 arg5）、`x86Syscall`×2（i386：R_EBX..R_EBP 截断写回）。`x64Syscall` 不插（转发 linux）。mask 必须先判否则把 fd 当指针解引用崩溃。
+  - **layer2 libc 路**：wrappedlibc.c **15 个 my_* wrapper** 内部首部重写（my_stat/my_lstat/my_fstatat/my_statx/my_readlink/my_readlinkat/my_fopen64/my_execv/my_execve/my_execvp/my_execvpe/my_realpath/my_statfs64/my_renameat2 双 path/my_open NULL 检查后），覆盖 64 位与 box32 的 GOM 汇入路径。
+  - 新建 `src/include/pathmap.h` + `src/libtools/pathmap.c`（CMake ELFLOADER_SRC 注册，CMake 插行带哨兵保幂等）；x64syscall.c include 锚 `#include "cpumask.h"`、**wrappedlibc.c include 必须在文件顶部** `#include "globalsymbols.h"` 后（曾插 :5533 wrappedlib_init.h 导致注入点在 include 前→隐式声明 conflicting types，已修）。
+- **验证**：①patch 幂等全 skip；②语法：pathmap.c/x64syscall.c/x86syscall.c/x86syscall_32.c 各 0 err，wrappedlibc.c 1720 既有环境 err 与 17 个注入行交集=空；③**全链 12 patch 干净树重放 ALL_CHAIN_OK**（cp box64→`_replay/box64` + `git checkout 7b23f2b -- .`；isnanf 需 fts 已存在跳下载、gen cache 双层 dirname 须 `_replay/box64` 两层结构）；④CI 36887913437 **md5=3cec7c30f50ed362b0749f2e8218e577** 已部署 ~/box64-patched 与 ~/box64-aarch64-musl（strings 含 BOX64_PATHMAP）；⑤**A/B 实测**：static x86-64 pmtest（open→write）A 轮无 env 落 `/tmp/pmtest.txt`、B 轮 `BOX64_PATHMAP=/tmp:/media/termux/home/pmdir` 后 `/tmp/pmtest.txt` 不存在、`pmdir/pmtest.txt` 内容 pathmap-ok（**layer1 static syscall 路径生效**）；⑥**q57 回归 rc=0/ui=1/ok=5** 无回归。
+- **约束**：勿映射 `/proc`（isProcSelf 判断依赖）；规则勿链式（A→B→C）；`my32_syscall`（box32 栈参数版）未插 layer1（libc syscall() 在 32 位程序中罕见，v1 留白）。
+- **仓库改名**：`addallno/Box64-musl` → **`addallno/box64-musl`**（2026-10-02，旧 URL 自动重定向；本地 remote 已 set-url；无文档引用旧名）。
