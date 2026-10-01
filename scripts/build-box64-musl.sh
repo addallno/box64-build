@@ -321,6 +321,9 @@ python3 $GITHUB_WORKSPACE/scripts/patch_joinlog.py $WORK/box64
 echo "==> 打 box32 分配族补丁（guest malloc/free 走 actual_*，32 位 steamcmd SIGABRT，B-14）"
 python3 $GITHUB_WORKSPACE/scripts/patch_b14_box32_alloc.py $WORK/box64
 
+echo "==> 打路径映射补丁（BOX64_PATHMAP 前缀重写，通用 GNU 程序适配）"
+python3 $GITHUB_WORKSPACE/scripts/patch_pathmap.py $WORK/box64
+
 echo "==> 生成 musl 缺失符号 stub（gen-libc-stubs.py）"
 MUSL_SYMS_OPT=""
 if [ -s "$MUSL_SYMS" ]; then
