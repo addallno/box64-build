@@ -474,6 +474,183 @@ JOBS = [
          "    actual_free(a);\n"
          "}\n"),
     ]),
+    ("src/wrapped32/wrappedlibc.c", [
+        (r'''#undef dirent
+// filter_dir
+''', r'''#undef dirent
+
+// b14: scandir 回调/结果缓冲统一走 box32 堆(<4GB)，防 to_ptrv 超 4G TEST_ABORT
+#define B14_I386_DIRENT_SZ 272
+#define B14_DIRENT64_SZ 320
+#define B14_SLOTS_SZ 16
+static __thread void* b14_sd_buf = NULL;
+static void* b14_sd_buf_get()
+{
+    if(!b14_sd_buf) b14_sd_buf = box32_calloc(1, B14_SLOTS_SZ + 4*B14_DIRENT64_SZ);
+    return b14_sd_buf;
+}
+// filter_dir
+'''),
+        (r'''#define GO(A)   \
+static uintptr_t my32_filter_dir_fct_##A = 0;                       \
+static int my32_filter_dir_##A(const struct dirent* a)            \
+{                                                                   \
+    static struct i386_dirent d = {0};                              \
+    UnalignDirent_32(a, &d);                                        \
+    return (int)RunFunctionFmt(my32_filter_dir_fct_##A, "p", &d);   \
+}
+''', r'''#define GO(A)   \
+static uintptr_t my32_filter_dir_fct_##A = 0;                       \
+static int my32_filter_dir_##A(const struct dirent* a)              \
+{                                                                   \
+    struct i386_dirent* d = (struct i386_dirent*)b14_sd_buf_get();  \
+    UnalignDirent_32(a, d);                                         \
+    return (int)RunFunctionFmt(my32_filter_dir_fct_##A, "p", d);    \
+}
+'''),
+        (r'''#define GO(A)   \
+static uintptr_t my32_compare_dir_fct_##A = 0;                                      \
+static int my32_compare_dir_##A(const struct dirent* a, const struct dirent* b)     \
+{                                                                                   \
+    struct i386_dirent d1, d2;                                               \
+    UnalignDirent_32(a, &d1);                                                       \
+    UnalignDirent_32(b, &d2);                                                       \
+    return (int)RunFunctionFmt(my32_compare_dir_fct_##A, "pp", &d1, &d2);           \
+}
+''', r'''#define GO(A)   \
+static uintptr_t my32_compare_dir_fct_##A = 0;                                      \
+static int my32_compare_dir_##A(const struct dirent* a, const struct dirent* b)     \
+{                                                                                   \
+    unsigned char* buf = b14_sd_buf_get();                                          \
+    struct i386_dirent* d1 = (struct i386_dirent*)buf;                              \
+    struct i386_dirent* d2 = (struct i386_dirent*)(buf + B14_I386_DIRENT_SZ);       \
+    UnalignDirent_32(*(struct dirent* const*)a, d1);                                 \
+    UnalignDirent_32(*(struct dirent* const*)b, d2);                                 \
+    return (int)RunFunctionFmt(my32_compare_dir_fct_##A, "pp", d1, d2);              \
+}
+'''),
+        (r'''#define GO(A)   \
+static uintptr_t my32_filter64_fct_##A = 0;                                 \
+static int my32_filter64_##A(const struct dirent* a)                      \
+{                                                                           \
+    return (int)RunFunctionFmt(my32_filter64_fct_##A, "p", a);  \
+}
+''', r'''#define GO(A)   \
+static uintptr_t my32_filter64_fct_##A = 0;                                 \
+static int my32_filter64_##A(const struct dirent* a)                        \
+{                                                                           \
+    unsigned char* buf = b14_sd_buf_get();                                  \
+    int len = a->d_reclen < B14_DIRENT64_SZ ? a->d_reclen : B14_DIRENT64_SZ;\
+    memcpy(buf, a, len);                                                    \
+    return (int)RunFunctionFmt(my32_filter64_fct_##A, "p", buf);            \
+}
+'''),
+        (r'''#define GO(A)   \
+static uintptr_t my32_compare64_fct_##A = 0;                                        \
+static int my32_compare64_##A(const struct dirent* a, const struct dirent* b)   \
+{                                                                                   \
+    return (int)RunFunctionFmt(my32_compare64_fct_##A, "pp", a, b);                 \
+}
+''', r'''#define GO(A)   \
+static uintptr_t my32_compare64_fct_##A = 0;                                        \
+static int my32_compare64_##A(const struct dirent* a, const struct dirent* b)       \
+{                                                                                   \
+    unsigned char* buf = b14_sd_buf_get();                                          \
+    ptr_t* sa = (ptr_t*)buf;                                                        \
+    ptr_t* sb = sa + 1;                                                             \
+    struct dirent* da = *(struct dirent* const*)a;                                  \
+    struct dirent* db = *(struct dirent* const*)b;                                  \
+    unsigned char* ca = buf + B14_SLOTS_SZ;                                         \
+    unsigned char* cb = ca + B14_DIRENT64_SZ;                                       \
+    memcpy(ca, da, da->d_reclen < B14_DIRENT64_SZ ? da->d_reclen : B14_DIRENT64_SZ);\
+    memcpy(cb, db, db->d_reclen < B14_DIRENT64_SZ ? db->d_reclen : B14_DIRENT64_SZ);\
+    *sa = (ptr_t)(uintptr_t)ca;                                                     \
+    *sb = (ptr_t)(uintptr_t)cb;                                                     \
+    return (int)RunFunctionFmt(my32_compare64_fct_##A, "pp", sa, sb);               \
+}
+'''),
+        (r'''EXPORT int my32_scandir(x64emu_t *emu, void* dir, ptr_t* namelist, void* sel, void* comp)
+{
+    struct dirent** list = NULL;
+    int ret = scandir(dir, &list, findfilter_dirFct(sel), findcompare_dirFct(comp));
+    *namelist = to_ptrv(list);
+    if (ret>0) {
+        // adjust the array of dirent... inplace adjust of listname and inplace of dirent too
+        for(int i=0; i<ret; ++i) {
+            struct dirent* dp64 = list[i];
+            struct i386_dirent *dp32 = (struct i386_dirent*)dp64;
+            // inplace shrink dirent
+            uint32_t ino32 = dp64->d_ino ^ (dp64->d_ino >> 32);
+            int32_t off32 = dp64->d_off;
+            dp32->d_ino = ino32;
+            dp32->d_off = off32;
+            dp32->d_reclen = dp64->d_reclen-(offsetof(struct dirent, d_name)-offsetof(struct i386_dirent, d_name));
+            dp32->d_type = dp64->d_type;
+            memmove(dp32->d_name, dp64->d_name, dp32->d_reclen-offsetof(struct i386_dirent, d_name));
+            // inplace shrink pointer to
+            ((ptr_t*)list)[i] = to_ptrv(list[i]);
+        }
+    }
+    return ret;
+}
+''', r'''EXPORT int my32_scandir(x64emu_t *emu, void* dir, ptr_t* namelist, void* sel, void* comp)
+{
+    struct dirent** list = NULL;
+    int ret = scandir(dir, &list, findfilter_dirFct(sel), findcompare_dirFct(comp));
+    if(ret < 0) return ret;
+    // b14: 深拷贝到 box32 堆(<4GB)，原 to_ptrv(list)/to_ptrv(list[i]) 遇 host 分配 >4G 即 TEST_ABORT
+    ptr_t* arr = (ptr_t*)box32_calloc(ret ? ret : 1, sizeof(ptr_t));
+    for(int i=0; i<ret; ++i) {
+        struct dirent* dp64 = list[i];
+        int reclen32 = (int)dp64->d_reclen-(offsetof(struct dirent, d_name)-offsetof(struct i386_dirent, d_name));
+        struct i386_dirent *dp32 = (struct i386_dirent*)box32_calloc(1, sizeof(struct i386_dirent));
+        dp32->d_ino = dp64->d_ino ^ (dp64->d_ino >> 32);
+        dp32->d_off = (int32_t)dp64->d_off;
+        dp32->d_reclen = (uint16_t)reclen32;
+        dp32->d_type = dp64->d_type;
+        memmove(dp32->d_name, dp64->d_name, reclen32-offsetof(struct i386_dirent, d_name));
+        arr[i] = (ptr_t)(uintptr_t)dp32;
+        free(dp64);
+    }
+    free(list);
+    *namelist = (ptr_t)(uintptr_t)arr;
+    return ret;
+}
+'''),
+        (r'''EXPORT int my32_scandir64(x64emu_t *emu, void* dir, ptr_t* namelist, void* sel, void* comp)
+{
+    struct dirent** list;
+    int ret = scandir(dir, &list, findfilter64Fct(sel), findcompare64Fct(comp));
+    if(ret>=0)
+        *namelist = to_ptrv(list);
+    if (ret>0) {
+        // inplace shrink of the array of dirent pointer (the dirent themselves are ok)
+        for(int i=0; i<ret; ++i) {
+            ((ptr_t*)list)[i] = to_ptrv(list[i]);
+        }
+    }
+    return ret;
+}
+''', r'''EXPORT int my32_scandir64(x64emu_t *emu, void* dir, ptr_t* namelist, void* sel, void* comp)
+{
+    struct dirent** list = NULL;
+    int ret = scandir(dir, &list, findfilter64Fct(sel), findcompare64Fct(comp));
+    if(ret < 0) return ret;
+    // b14: 深拷贝到 box32 堆，防 to_ptrv(list)/to_ptrv(list[i]) >4G TEST_ABORT
+    ptr_t* arr = (ptr_t*)box32_calloc(ret ? ret : 1, sizeof(ptr_t));
+    for(int i=0; i<ret; ++i) {
+        struct dirent* dp64 = list[i];
+        struct dirent* cp = (struct dirent*)box32_calloc(1, dp64->d_reclen);
+        memcpy(cp, dp64, dp64->d_reclen);
+        arr[i] = (ptr_t)(uintptr_t)cp;
+        free(dp64);
+    }
+    free(list);
+    *namelist = (ptr_t)(uintptr_t)arr;
+    return ret;
+}
+'''),
+    ]),
 ]
 
 
