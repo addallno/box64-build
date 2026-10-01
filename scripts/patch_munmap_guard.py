@@ -76,15 +76,11 @@ def main():
         "{\n"
         "    // BOX64-BUILD: munmap-guard 拆前校验标记，拒拆 box64 内部/无标记页（B-12：guest munmap 拆 p_blocks）\n"
         "    if(!box_guest_mapping_flag((uintptr_t)addr)) {\n"
-        "        fprintf(stderr, \"P12GUARD skip munmap %p len=%lu\\n\", addr, length);\n"
         "        return 0;\n"
         "    }\n"
         "    int ret = InternalMunmap(addr, length);\n"
     )
-    # 还需 <stdio.h>（fprintf）
-    anchor_d = "#include <stdint.h>\n"
-    decl_d = "#include <stdio.h>   // BOX64-BUILD: munmap-guard\n" + anchor_d
-    apply_file(mmapf, [(anchor_b, decl_b), (anchor_c, repl_c), (anchor_d, decl_d)])
+    apply_file(mmapf, [(anchor_b, decl_b), (anchor_c, repl_c)])
     return 0
 
 if __name__ == "__main__":
