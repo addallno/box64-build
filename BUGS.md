@@ -167,3 +167,24 @@ musl 静态运行时 `dlopen(NULL)/dlsym(任意 handle)` 全部返回 0（`Dynam
   - 64 位 q56_join 单轮：rc=0 ui=1 ok=5，SIG*=0；
   - 64 位 q53 十轮压力：**LOGIN=10/10**，trig=0（无 FillBlock 崩溃）。
 - 同日 subagent 三报告结论：B-04 断言→SIGTRAP 根因为 **proot 使 TracerPid≠0 → steam IsDebuggerPresent 判真 → int3 必死**，零代码缓解 `BOX64_IGNOREINT3=1`；B-06 刷屏已随 B-13（BAD_PKILL）修复；patch 链加固 Top8（syscalls 假幂等/jmptbl 跨文件哨兵/stamp 转义锚/jmptbl 报错无锚文/joinlog include 相邻锚等）待后续落地。
+
+### B-14 附加：scandir 回调/结果 >4G to_ptrv 偶发 SIGABRT（已修复 ✅ 2026-09-30）
+- **现象**：B-14 分配族修复后 32 位 steamcmd 偶发仍 SIGABRT，崩前 `Warning, pointer 0x2000001950 is not a 32bits value` + `EmulatedBT box64(scandir64+0)`；时崩时过（musl scandir 内部分配大块走 mmap >4GB、小块 brk <4GB → 偶发）。
+- **根因**：`my32_scandir/my32_scandir64` 用 `to_ptrv(list)`/`to_ptrv(list[i])` 写 guest 出参；4 套回调模板把 native/静态/栈指针直接传 `RunFunctionFmt("p"/"pp",...)`（内部 to_ptrv，box32.h TEST_ABORT 即 box64_abort）。
+- **修复（e557268，`patch_b14_box32_alloc.py` 第二个 wrappedlibc.c JOBS 条目，7 组锚替换）**：TLS 缓冲 `b14_sd_buf`（box32 堆 <4GB）供 4 回调复用；compare 系解引用 qsort 槽（musl compar 收二级槽地址，alphasort 二级原型直作 compar 为铁证）后深拷入缓冲，compare64 构造 guest 可读二级槽；返回路径整体改深拷贝（每 dirent box32_calloc 独立块 + ptr_t 数组），删原 to_ptrv/inplace shrink。
+- **验证**：本地语法 248err=基线零新增；CI 36863383961 产物 md5=1adc6f0d 已部署（~/box64-patched 等三处）；q57 六轮 rc=0/ui=1/ok=5，`not-a-32bits=0`、SIG*=0。
+
+### B-12 附加：P12GUARD 守卫日志已移除（7f0233e）
+- patch_munmap_guard.py 删 fprintf 日志行，**保留 `box_guest_mapping_flag()` 拦截逻辑本身**（拆 custommem 映射的防崩溃能力不变）；已随后续产物（含 e557268）部署，q57 回归覆盖无 P12GUARD 输出。
+
+## b14 patch JOBS 审计（2026-09-30，只读全量通读 + 实证）
+
+**结论：10 个文件条目（wrappedlibc.c 占两处）逻辑自洽，未发现必须立即修的新 bug**（B-14 链与 scandir 修复均有 q57 rc=0/ui=1/ok=5 实证，q53 十轮 10/10 LOGIN）。记录级疑点（按风险从高到低，均暂不修）：
+
+1. **重入覆盖**：`b14_sd_buf`（__thread 单块）被 filter/compare 回调共用——若 guest compar 内部再调 scandir（重入），缓冲内容互相覆盖 → 排序/过滤数据错乱（不崩）。compar 内 scandir 罕见，暂不改（改法：每回调独立偏移或嵌套计数）。
+2. **dladdr 拷贝泄漏**：wrappedlibdl.c `B14_S32` 对 >4G host 字符串 box32_strdup 后原指针非 malloc 不可释放，guest 按 dladdr 约定也从不 free dli_* → 每次调用泄漏几十字节（dladdr 频率低）。修复需引用计数或环形缓存，暂不做。
+3. **asprintf `b14_chk_out` <4G 分支**：p<4G 时 to_ptrv 直通，guest 收 host 堆指针，free 时走 box32_free→非 custom→box_free 链——proot 宿主堆恒 >4GB 走 strdup 分支不触发；仅理论风险（非 proot、MAP_32BIT 场景）。
+4. **b14_ifa_blob 未知 sa_family 截 16 字节**：getifaddrs 实际只产 inet/inet6/packet/netlink（各自已定长 16/28/20/16），不触发；其他 family 理论截断。
+5. **reallocarray/pvalloc 溢出**：`nmemb*size`、`size+page-1` 未查溢出（E 大值），原上游行为保留，未修。
+6. **fake_locale 地址前提**：box32.c 静态数组依赖 static 非 PIE 加载基址 <4GB；若改动态构建 to_locale 特例仍会 to_ptrv 超限 abort。当前 static=true 构建不触发。
+7. **GOW→GOM 丢 weak 属性**：分配族改 GOM 后 weak 绑定语义变化——static 构建全部强绑定 `&my32_*`，无实际差异。
