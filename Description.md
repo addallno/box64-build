@@ -135,11 +135,22 @@ patch，哨兵 `BOX64-BUILD: gai-fix`，全部 job 可幂等重放）：
 - gai-test-dyn 动态自测：0x2/0x400/0x200000/0x10000000/0x200402/NI_IDN 全 rc=0
 - 注意：**静态链接 guest 会绕过 box64 符号包装**，诊断程序必须动态编译
 
-**q57 回归（2026-10-02）**：原 proot 环境与 steamcmd 已不存在，降级为对照测试——
-- `git diff 984cd05..HEAD` 确认 **wrapped32/ 0 处改动**（仅 64 位 wrappedlibc.c/private.h）；
-  CI run 36970237989 含 BOX32 编译通过。
-- 旧版产物（run 36887913437 / 43edcab，gai 修复前）与新版并测：
-  - 32 位静态 busybox1.37 与动态 dash+i386 libc6：**新旧版均 rc=139 SIGSEGV**（box32
-    既有状态，非本次引入；q57 原用 box64-patched 专用版本与 steamcmd 场景）；
-  - ping：旧版复现 `dn_comp not found` + `Invalid flags`，新版 1 received / 0% loss ✓。
-- 结论：gai 修复对 box32 路径**无回归**，64 位修复经新旧对照确证有效。
+**q57 回归（2026-10-02，通过）**：q57 的 proot 环境完好——tmoe ubuntu-jammy
+（rootfs `~/.local/share/tmoe-linux/containers/proot/ubuntu-jammy_arm64`，
+steamcmd 在其 `/root/steam/linux32/`，脚本内 `/media/termux/home` 为 proot 内
+视角的 Termux home）。**跑 q57 必须启动 proot 实例**（Termux 侧直接跑只有
+bionic 环境，不代表 q57 场景）：
+- `git diff 984cd05..HEAD` 确认 **wrapped32/ 0 处改动**；CI run 36970237989
+  含 BOX32 编译通过。
+- 新版 box64-bin（705fdfe）proot 内实测（`tests/q57.sh`，timeout 240）：
+  **5 轮中 4 轮完整成功**（rc=0，`Waiting for user info...OK` +
+  `Unloading Steam API...OK`，与 2026-09-30 基准 q57_tee2.log 一致），1 轮
+  间歇 SIGSEGV；另有 1 轮 rc=0 但未到 user info（登录早退模式）。
+  注：timeout 65 会卡在 `Logging in user...`（Steam 网络重试），需 ≥240s。
+- **对照旧版 box64-old（43edcab，gai 修复前）同法 5 轮**：同样 1 轮 SIGSEGV
+  （run1）+ 1 轮早退（run5）+ 3 轮完整成功——**崩溃/早退复现率与新版相当
+  → 既有不稳定状态，非 gai 修复引入**。
+- 对照补充：gai 修复前产物复现 ping `dn_comp not found` + `Invalid flags`，
+  新版 1 received / 0% loss ✓；Termux 侧（bionic 直跑）32 位 busybox/dash
+  新旧均 SIGSEGV，属该环境既有状态，与 q57（proot 内）无关。
+- 结论：gai 修复对 64 位 ping 有效、对 box32/q57 **无回归**。
