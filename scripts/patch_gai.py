@@ -73,10 +73,12 @@ def main():
         fail("用法: patch_gai.py <box64目录>")
     root = sys.argv[1]
 
-    # ---- wrappedlibc_private.h：getaddrinfo 转 GOM + 新增 dn_comp 符号 ----
+    # ---- wrappedlibc_private.h：getaddrinfo/getnameinfo 转 GOM + dn_comp 符号 ----
     apply_file(os.path.join(root, "src", "wrapped", "wrappedlibc_private.h"), [
         ("GO(getaddrinfo, iFpppp)\n",
          "// BOX64-BUILD: gai-fix GOM 包一层剥离 glibc 专有 AI flag\nGOM(getaddrinfo, iFEpppp)\n"),
+        ("GO(getnameinfo, iFpupupui)\n",
+         "// BOX64-BUILD: gai-fix GOM 包一层剥离 glibc 专有 NI_IDN(0x20)\nGOM(getnameinfo, iFEpupupui)\n"),
         ("GOM(dprintf, iFEipV)\n",
          "GO(dn_comp, iFppipp)  // BOX64-BUILD: gai-fix glibc2.34 归 libc，musl 自带转发\n"
          "GOM(dprintf, iFEipV)\n"),
@@ -102,6 +104,22 @@ def main():
     return ret;
 }
 """ + MY_GETADDRINFO.format(sentinel=SENTINEL)),
+        ("""    return getaddrinfo(node, service, hints, res);
+}
+""",
+         """    return getaddrinfo(node, service, hints, res);
+}
+
+// """ + SENTINEL + """ glibc 专有 NI_IDN(0x20) 剥离（bionic 会 EAI_BADFLAGS →
+// gai_strerror 打 "Invalid flags"）；基础位 NUMHOST/NUMSERV/NOFQDN/
+// NAMEREQD/DGRAM 均 <=0x1F，保留之。
+EXPORT int my_getnameinfo(x64emu_t* emu, const struct sockaddr* sa, uint32_t salen,
+    char* host, uint32_t hostlen, char* serv, uint32_t servlen, int flags)
+{
+    (void)emu;
+    return getnameinfo(sa, salen, host, hostlen, serv, servlen, flags & 0x1F);
+}
+"""),
     ])
 
     print("[patch_gai] 完成")
