@@ -78,7 +78,8 @@ def main():
         ("GO(getaddrinfo, iFpppp)\n",
          "// BOX64-BUILD: gai-fix GOM 包一层剥离 glibc 专有 AI flag\nGOM(getaddrinfo, iFEpppp)\n"),
         ("GO(getnameinfo, iFpupupui)\n",
-         "// BOX64-BUILD: gai-fix GOM 包一层剥离 glibc 专有 NI_IDN(0x20)\nGOM(getnameinfo, iFEpupupui)\n"),
+         "// BOX64-BUILD: gai-fix GOM 包一层剥离 glibc 专有 NI_IDN(0x20)（iFpupupui 为预生成类型）\n"
+         "GOM(getnameinfo, iFpupupui)\n"),
         ("GOM(dprintf, iFEipV)\n",
          "GO(dn_comp, iFppipp)  // BOX64-BUILD: gai-fix glibc2.34 归 libc，musl 自带转发\n"
          "GOM(dprintf, iFEipV)\n"),
@@ -113,10 +114,9 @@ def main():
 // """ + SENTINEL + """ glibc 专有 NI_IDN(0x20) 剥离（bionic 会 EAI_BADFLAGS →
 // gai_strerror 打 "Invalid flags"）；基础位 NUMHOST/NUMSERV/NOFQDN/
 // NAMEREQD/DGRAM 均 <=0x1F，保留之。
-EXPORT int my_getnameinfo(x64emu_t* emu, const struct sockaddr* sa, uint32_t salen,
+EXPORT int my_getnameinfo(const struct sockaddr* sa, uint32_t salen,
     char* host, uint32_t hostlen, char* serv, uint32_t servlen, int flags)
 {
-    (void)emu;
     return getnameinfo(sa, salen, host, hostlen, serv, servlen, flags & 0x1F);
 }
 """),
