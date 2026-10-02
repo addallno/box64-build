@@ -107,3 +107,31 @@ BOX64_PATHMAP=/tmp:/data/local/tmp ./x86_program
 - **覆盖**：syscall 直调（static 程序、box32 int 0x80）与 libc wrapper（open/stat/execve/fopen/renameat 等 15 个）双层。
 - **约束**：勿映射 `/proc`；规则勿链式；env 由子进程继承，无需额外配置。
 - 实现见 `scripts/patch_pathmap.py`（13/13 patch 链），BUGS.md「BOX64_PATHMAP 路径前缀映射」章。
+
+## gai 兼容修复（patch_gai.py，B 功能）
+
+无 proot 在 Android（bionic）跑通用 GNU 程序时，guest glibc 语义与宿主
+实现的三处差异导致 iputils ping 等程序直接退出。patch_gai.py（第 14 号
+patch，哨兵 `BOX64-BUILD: gai-fix`，全部 job 可幂等重放）：
+
+1. **getaddrinfo AI flag 剥离**：GOM(getaddrinfo, iFEpppp) → my_getaddrinfo
+   拷贝 hints 剥 `0x40|0x80|0x10000000|0x00200000`（AI_IDN/AI_CANONIDN 及
+   IDN 扩展位）。**位值铁证**：ping 反汇编 `movl $0xc2, -0x70(%rbp)` =
+   hints.ai_flags=0xC2（CANONNAME 0x2 | IDN 0x40 | CANONIDN 0x80），与
+   glibc/bionic netdb.h 一致，但 bionic 运行时不认 0x40/0x80 → EAI_BADFLAGS
+   → gai_strerror "Invalid flags" → ping.c:656 返回码 2。
+2. **getnameinfo NI_IDN 剥离**：GOM(getnameinfo, **iFpupupui**) →
+   my_getnameinfo（无 emu）`flags & 0x1F`（基础位 NUMHOST..DGRAM 保留）。
+   ⚠️ CI 模式 `if(NOT CI)` 跳过 rebuild_wrappers.py → **GOM 类型串必须是
+   wrapper.h 预生成表已有类型**：iFpupupui ✓（3224 行）、iFEpppp ✓（1984 行）、
+   **iFEpupupui ✗**（首版据此 CI 失败 `'iFEpupupui' undeclared`）。
+3. **dn_comp**：glibc 2.34 并入 libc 导出，GO(dn_comp, iFppipp) 自动生成转发
+   （musl 1.2.5 自带同签名实现），修复 R_X86_64_JUMP_SLOT 符号缺失。
+
+**验证**（2026-10-02，远端 Android + CI run 36970237989 / commit 35c3ea6，
+产物 md5 705fdfe191f382cc236456edfd1970ab）：
+- `./box64-bin ./ping -c1 127.0.0.1` → rc=0，0% loss（修复前 Invalid flags rc=2）
+- `ping -V` → libcap yes, IDN yes
+- gai-test-dyn 动态自测：0x2/0x400/0x200000/0x10000000/0x200402/NI_IDN 全 rc=0
+- 注意：**静态链接 guest 会绕过 box64 符号包装**，诊断程序必须动态编译
+- 32 位（box32）走 wrapped32 独立 private.h，本次未动，q57 不受影响

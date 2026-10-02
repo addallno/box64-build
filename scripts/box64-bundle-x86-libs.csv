@@ -12,12 +12,10 @@ https://archive.debian.org/debian/pool/main/p/pipewire/libpipewire-0.3-modules_0
 https://archive.debian.org/debian/pool/main/p/pipewire/libpipewire-0.3-modules_0.3.65-2~bpo11+1_i386.deb,4585064f220490562c132e6fe6a2c46a66d319f6862f60f26e21bccbaadcbd90
 https://archive.debian.org/debian/pool/main/p/pipewire/libspa-0.2-modules_0.3.65-2~bpo11+1_amd64.deb,833a024051fcfa79208462486c2761b6e1c464676da96e0d3664f4a189449e34
 https://archive.debian.org/debian/pool/main/p/pipewire/libspa-0.2-modules_0.3.65-2~bpo11+1_i386.deb,5cbd85ab559d99dc5907898488c87b8cf0e117412e0d7981ca7e69e35fbc3f84
-https://archives.fedoraproject.org/pub/archive/epel/9.5/Everything/x86_64/Packages/m/mbedtls-2.28.8-1.el9.x86_64.rpm,54cb7e43e902a7378e912ecfec470ee30fe69af323d3812cbc39ddebd64790ff
 https://archives.fedoraproject.org/pub/archive/fedora/linux/releases/34/Everything/x86_64/os/Packages/l/libpng12-1.2.57-13.fc34.i686.rpm,5e4f525f44d538e3467dd13c66010d54f3d12ec4a319829e15a23ff2d0195b5b
 https://archives.fedoraproject.org/pub/archive/fedora/linux/releases/34/Everything/x86_64/os/Packages/l/libpng12-1.2.57-13.fc34.x86_64.rpm,49f956ad143399c29f5ddf6da6b6fc108ce130d1ed598b4ec5a68b1ff26091de
 https://archives.fedoraproject.org/pub/archive/fedora/linux/releases/34/Everything/x86_64/os/Packages/l/libunwind-1.4.0-5.fc34.x86_64.rpm,0f44e37e4eb472508e0dba8505ebbb04c2c1390c6a43970a6af80aad886037e3
 https://archives.fedoraproject.org/pub/archive/fedora/linux/updates/34/Everything/x86_64/Packages/h/hidapi-0.11.2-2.fc34.i686.rpm,386040fc502e2f02b4b072e0cd90c034dc0a30831fbd2ddb116d17c080b6f9a4
-https://archives.fedoraproject.org/pub/archive/fedora/linux/updates/40/Everything/x86_64/Packages/s/SDL3-3.2.12-1.fc40.i686.rpm,4a3bce6e6358ddd05ed2941e7b8fcc4c8cc02df20741d3f0f9295facbc687769
 https://archives.fedoraproject.org/pub/archive/fedora/linux/updates/40/Everything/x86_64/Packages/s/SDL3-3.2.12-1.fc40.x86_64.rpm,9524803ef42d80dc1b15190d5bb5925200995d5a6152eca04471383ff891af17
 https://cdn.getsol.us/repo/shannon/libj/libjpeg-turbo/libjpeg-turbo-3.0.3-21-1-x86_64.eopkg,c92f19d446b4c2450306f13b1a908f2552400da09301996fe349fee243d964d2
 https://cdn.getsol.us/repo/shannon/libj/libjpeg-turbo/libjpeg-turbo-32bit-3.0.3-21-1-x86_64.eopkg,5624990281f6520026aa2252c711f02d4916099aeac63accc83bd2135b9d3220
@@ -95,7 +93,3 @@ https://vault.almalinux.org/9.5/BaseOS/x86_64/os/Packages/zlib-1.2.11-40.el9.i68
 https://vault.almalinux.org/9.5/BaseOS/x86_64/os/Packages/zlib-1.2.11-40.el9.x86_64.rpm,90d7d5d145c6d397645ffefdff40e3d2783e3bf3bfa7b6c1f089c2cad81a3191
 https://deb.debian.org/debian/pool/main/libc/libcap2/libcap2_2.66-4+deb12u3+b1_amd64.deb,8d684c673e7483802a5c447834b0df6fce006eb3a7109e1be412f5ad425bb24f
 https://deb.debian.org/debian/pool/main/libc/libcap2/libcap2_2.66-4+deb12u3+b1_i386.deb,ec2df8503ee282fa5ca129cb0272bb2b0c05b9969aa8568bca567ab62bca15ad
-https://deb.debian.org/debian/pool/main/libi/libidn2/libidn2-0_2.3.3-1+b1_amd64.deb,d50716d5824083d667427817d506b45d3f59dc77e1ca52de000f3f62d4918afa
-https://deb.debian.org/debian/pool/main/libi/libidn2/libidn2-0_2.3.3-1+b1_i386.deb,49167c0ddd749810a5242b60c7e280860f4fbcb7b4ee9ee456f44d97cd5baef5
-https://deb.debian.org/debian/pool/main/libu/libunistring/libunistring2_1.0-2_amd64.deb,d466bbfe011d764d793c1d9d777cad9c7cf65b938e11598f27408171ad95a951
-https://deb.debian.org/debian/pool/main/libu/libunistring/libunistring2_1.0-2_i386.deb,04aed8ddaa8f92fcdb378bd92eb23a78bda0f3e3be59501329b1968362492781
