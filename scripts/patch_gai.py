@@ -4,8 +4,9 @@
 getaddrinfo/dn_comp 兼容 patch（bionic/musl 宿主适配，通用 GNU 程序适配）。
 
 背景：x86 guest（glibc 语义）与宿主 libc（bionic/musl）的两处差异：
-1. getaddrinfo：iputils 等 USE_IDN 程序按 glibc 传 AI_IDN(0x10000000) |
-   AI_CANONIDN(0x00200000)，bionic 对未识别 flag 位返回 EAI_BADFLAGS，
+1. getaddrinfo：iputils 等 USE_IDN 程序按编译头传 AI_CANONNAME(0x2)|
+   AI_IDN(0x40)|AI_CANONIDN(0x80)（ping 反汇编 hints.ai_flags=0xC2 证实，
+   glibc/bionic netdb.h 同值），bionic 对未识别 flag 位返回 EAI_BADFLAGS，
    guest 收到 gai_strerror(EAI_BADFLAGS)="Invalid flags" 直接退出。
    修法：GOM 包一层，拷贝 hints 剥离 glibc 专有位后转发宿主实现。
 2. dn_comp：glibc 2.34 起并入 libc.so.6 导出（optver GLIBC_2.34），
@@ -58,9 +59,9 @@ EXPORT int my_getaddrinfo(x64emu_t* emu, const char* node, const char* service,
     struct addrinfo h;
     if(hints) {{
         h = *hints;
-        // glibc: AI_IDN=0x10000000 AI_CANONIDN=0x00200000（bionic 未识别即拒绝）
-        h.ai_flags &= ~0x10000000;
-        h.ai_flags &= ~0x00200000;
+        // 头真值 AI_IDN=0x0040 AI_CANONIDN=0x0080（反汇编 0xC2 证实），
+        // 另剥 IDN 扩展位；AI_CANONNAME(0x2)/NUMERICSERV(0x400) 等基础位保留
+        h.ai_flags &= ~(0x0040 | 0x0080 | 0x10000000 | 0x00200000);
         hints = &h;
     }}
     return getaddrinfo(node, service, hints, res);
