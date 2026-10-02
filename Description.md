@@ -134,4 +134,12 @@ patch，哨兵 `BOX64-BUILD: gai-fix`，全部 job 可幂等重放）：
 - `ping -V` → libcap yes, IDN yes
 - gai-test-dyn 动态自测：0x2/0x400/0x200000/0x10000000/0x200402/NI_IDN 全 rc=0
 - 注意：**静态链接 guest 会绕过 box64 符号包装**，诊断程序必须动态编译
-- 32 位（box32）走 wrapped32 独立 private.h，本次未动，q57 不受影响
+
+**q57 回归（2026-10-02）**：原 proot 环境与 steamcmd 已不存在，降级为对照测试——
+- `git diff 984cd05..HEAD` 确认 **wrapped32/ 0 处改动**（仅 64 位 wrappedlibc.c/private.h）；
+  CI run 36970237989 含 BOX32 编译通过。
+- 旧版产物（run 36887913437 / 43edcab，gai 修复前）与新版并测：
+  - 32 位静态 busybox1.37 与动态 dash+i386 libc6：**新旧版均 rc=139 SIGSEGV**（box32
+    既有状态，非本次引入；q57 原用 box64-patched 专用版本与 steamcmd 场景）；
+  - ping：旧版复现 `dn_comp not found` + `Invalid flags`，新版 1 received / 0% loss ✓。
+- 结论：gai 修复对 box32 路径**无回归**，64 位修复经新旧对照确证有效。
