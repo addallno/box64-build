@@ -324,6 +324,9 @@ python3 $GITHUB_WORKSPACE/scripts/patch_b14_box32_alloc.py $WORK/box64
 echo "==> 打路径映射补丁（BOX64_PATHMAP 前缀重写，通用 GNU 程序适配）"
 python3 $GITHUB_WORKSPACE/scripts/patch_pathmap.py $WORK/box64
 
+echo "==> 打 getaddrinfo/dn_comp 兼容补丁（bionic 宿主 EAI_BADFLAGS / glibc2.34 符号）"
+python3 $GITHUB_WORKSPACE/scripts/patch_gai.py $WORK/box64
+
 echo "==> 生成 musl 缺失符号 stub（gen-libc-stubs.py）"
 MUSL_SYMS_OPT=""
 if [ -s "$MUSL_SYMS" ]; then
