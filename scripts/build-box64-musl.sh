@@ -327,6 +327,9 @@ python3 $GITHUB_WORKSPACE/scripts/patch_pathmap.py $WORK/box64
 echo "==> 打 getaddrinfo/dn_comp 兼容补丁（bionic 宿主 EAI_BADFLAGS / glibc2.34 符号）"
 python3 $GITHUB_WORKSPACE/scripts/patch_gai.py $WORK/box64
 
+echo "==> 打 pathmap2 补丁（mkdir/access/__xstat 系 wrapped 直通补映射，breakpad /tmp/dumps）"
+python3 $GITHUB_WORKSPACE/scripts/patch_pathmap2.py $WORK/box64
+
 echo "==> 生成 musl 缺失符号 stub（gen-libc-stubs.py）"
 MUSL_SYMS_OPT=""
 if [ -s "$MUSL_SYMS" ]; then
