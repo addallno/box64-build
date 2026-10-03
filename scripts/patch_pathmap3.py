@@ -114,14 +114,15 @@ def patch(srcdir: str) -> int:
                  "GO(shmget, iFiLi)\n",
                  1, "GO(shmget)", "wrappedlibc_private.h")
 
-    # --- job5: wrappedlibrt 抢跑条目改 GOM（shm_open/shm_unlink 归 my_ 处理）---
+    # --- job5a: wrappedlibrt 抢跑条目改 GOM（shm_open/shm_unlink 归 my_ 处理）---
+    # 注意：private.h 被 wrappedlib_init.h 在 6 个初始化器区段 include，
+    # 只允许 GO/GOM 等条目行；extern 声明会触发 "expected expression before 'extern'"。
+    # my_* 的 extern 前向声明必须放 wrappedlibrt.c 顶层（job5b，同 TU 可见）。
     p_rt = os.path.join(srcdir, "src", "wrapped", "wrappedlibrt_private.h")
     with open(p_rt, "r", encoding="utf-8") as f:
         rt = f.read()
     if SENTINEL + " librt" not in rt:
         rt = apply(rt, "GO(shm_open, iFpOu)\n",
-                   "extern int my_shm_open(x64emu_t*, const char*, int, int);  // " + SENTINEL + " librt\n"
-                   "extern int my_shm_unlink(x64emu_t*, const char*);\n"
                    "GOM(shm_open, iFEpii)     // " + SENTINEL + " librt抢跑改my_\n",
                    1, "GO(shm_open)", "wrappedlibrt_private.h")
         rt = apply(rt, "GO(shm_unlink, iFp)\n",
@@ -132,6 +133,20 @@ def patch(srcdir: str) -> int:
         print("patch_pathmap3: wrappedlibrt 改 GOM(2处)")
     else:
         print("patch_pathmap3: wrappedlibrt 已应用，跳过")
+
+    # --- job5b: wrappedlibrt.c 顶层加 my_* extern 前向声明 ---
+    p_rtc = os.path.join(srcdir, "src", "wrapped", "wrappedlibrt.c")
+    with open(p_rtc, "r", encoding="utf-8") as f:
+        rtc = f.read()
+    if SENTINEL + " librt extern" not in rtc:
+        rtc = apply(rtc, "#undef aio_suspend\n",
+                    "extern int my_shm_open(x64emu_t*, const char*, int, int);  // " + SENTINEL + " librt extern\n"
+                    "extern int my_shm_unlink(x64emu_t*, const char*);\n"
+                    "#undef aio_suspend\n",
+                    1, "#undef aio_suspend", "wrappedlibrt.c")
+        with open(p_rtc, "w", encoding="utf-8") as f:
+            f.write(rtc)
+        print("patch_pathmap3: wrappedlibrt.c 顶层 extern(2行)")
 
     # --- job4: library.c resolve 观测（临时调试，定位后撤）---
     p_libr = os.path.join(srcdir, "src", "librarian", "library.c")
