@@ -26,6 +26,7 @@ EXPORT int my_shm_open(x64emu_t* emu, const char* name, int oflag, int mode)
 {
     (void)emu;
     int r = shm_open(name, oflag, mode);
+    fprintf(stderr, "[pm3] my_shm_open name=%s oflag=%d mode=%d r=%d errno=%d\n", name?name:"(null)", oflag, mode, r, r<0?errno:0);
     if (r >= 0)
         return r;
     if (!name || name[0] == '\0')
@@ -41,7 +42,9 @@ EXPORT int my_shm_open(x64emu_t* emu, const char* name, int oflag, int mode)
     int n = snprintf(path, sizeof(path), "%s/%s", tmp, base);
     if (n < 0 || n >= (int)sizeof(path))
         return r;
-    return open(path, oflag, mode);
+    int fd = open(path, oflag, mode);
+    fprintf(stderr, "[pm3] fallback open(%s) fd=%d errno=%d\n", path, fd, fd<0?errno:0);
+    return fd;
 }
 
 EXPORT int my_shm_unlink(x64emu_t* emu, const char* name)
