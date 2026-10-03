@@ -330,6 +330,9 @@ python3 $GITHUB_WORKSPACE/scripts/patch_gai.py $WORK/box64
 echo "==> 打 pathmap2 补丁（mkdir/access/__xstat 系 wrapped 直通补映射，breakpad /tmp/dumps）"
 python3 $GITHUB_WORKSPACE/scripts/patch_pathmap2.py $WORK/box64
 
+echo "==> 打 pathmap3 补丁（shm_open/shm_unlink TMPDIR fallback，threadtools 断言）"
+python3 $GITHUB_WORKSPACE/scripts/patch_pathmap3.py $WORK/box64
+
 echo "==> 生成 musl 缺失符号 stub（gen-libc-stubs.py）"
 MUSL_SYMS_OPT=""
 if [ -s "$MUSL_SYMS" ]; then
