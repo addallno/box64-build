@@ -8,9 +8,9 @@ shm_open 是 native 直通 → box64-bin 内 musl 写死 /dev/shm 前缀 → And
 /dev/shm → ENOENT/EACCES → threadtools.cpp(2526) "Permission denied" 断言 +
 "Process failed to shm_open"。
 
-方案：GOWM 包装，先试宿主 shm_open，失败（ENOENT 等）时提取 basename 落
+方案：GOM 包装（非weak，getSymbolInSymbolMaps 919行无条件命中；GOWM 走 !noweak 分支会被跳过），先试宿主 shm_open，失败（ENOENT 等）时提取 basename 落
 $TMPDIR/<name>（open 相同 oflag），shm_unlink 同理。
-- wrappedlibc_private.h：GO(shmget) 前插 GOWM(shm_open,iFEpii)+GOWM(shm_unlink,iFEpi)
+- wrappedlibc_private.h：GO(shmget) 前插 GOM(shm_open,iFEpii)+GOM(shm_unlink,iFEpi)
   （iFEpi wrapper.c:603、iFEpii :1209 typedef 均已存在；mode 按 int 传 ABI 等价）
 - wrappedlibc.c：pathmap2 哨兵前插 my_shm_open/my_shm_unlink（依赖链 pathmap2→3）
 
@@ -106,8 +106,8 @@ def patch(srcdir: str) -> int:
     # 2) private.h：shmget 条目前插 GOWM 绑定
     priv = apply(priv,
                  "GO(shmget, iFiLi)\n",
-                 "GOWM(shm_open, iFEpii)   // " + SENTINEL + "\n"
-                 "GOWM(shm_unlink, iFEpi)  // " + SENTINEL + "\n"
+                 "GOM(shm_open, iFEpii)    // " + SENTINEL + " GOM非weak(919直查)"
+                 "GOM(shm_unlink, iFEpi)   // " + SENTINEL + " GOM非weak(919直查)"
                  "GO(shmget, iFiLi)\n",
                  1, "GO(shmget)", "wrappedlibc_private.h")
 

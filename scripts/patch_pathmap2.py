@@ -96,9 +96,9 @@ def patch(srcdir: str) -> int:
                  "my_stat 前插新函数", "wrappedlibc.c")
 
     # ---- 3) private.h：GOW/GO → GOWM ----
-    priv = apply(priv, "GOW(access, iFpi)\n", "GOWM(access, iFEpi)\n",
+    priv = apply(priv, "GOW(access, iFpi)\n", "GOM(access, iFEpi)   // BOX64-BUILD: pathmap2 GOM 非weak直查(919行)\n",
                  1, "GOW(access)", "wrappedlibc_private.h")
-    priv = apply(priv, "GOW(mkdir, iFpu)\n", "GOWM(mkdir, iFEpu)\n",
+    priv = apply(priv, "GOW(mkdir, iFpu)\n", "GOM(mkdir, iFEpu)     // BOX64-BUILD: pathmap2 GOM 非weak直查(919行)\n",
                  1, "GOW(mkdir)", "wrappedlibc_private.h")
 
     with open(p_libc, "w", encoding="utf-8") as f:
