@@ -114,6 +114,25 @@ def patch(srcdir: str) -> int:
                  "GO(shmget, iFiLi)\n",
                  1, "GO(shmget)", "wrappedlibc_private.h")
 
+    # --- job5: wrappedlibrt 抢跑条目改 GOM（shm_open/shm_unlink 归 my_ 处理）---
+    p_rt = os.path.join(srcdir, "src", "wrapped", "wrappedlibrt_private.h")
+    with open(p_rt, "r", encoding="utf-8") as f:
+        rt = f.read()
+    if SENTINEL + " librt" not in rt:
+        rt = apply(rt, "GO(shm_open, iFpOu)\n",
+                   "extern int my_shm_open(x64emu_t*, const char*, int, int);  // " + SENTINEL + " librt\n"
+                   "extern int my_shm_unlink(x64emu_t*, const char*);\n"
+                   "GOM(shm_open, iFEpii)     // " + SENTINEL + " librt抢跑改my_\n",
+                   1, "GO(shm_open)", "wrappedlibrt_private.h")
+        rt = apply(rt, "GO(shm_unlink, iFp)\n",
+                   "GOM(shm_unlink, iFEpi)    // " + SENTINEL + " librt抢跑改my_\n",
+                   1, "GO(shm_unlink)", "wrappedlibrt_private.h")
+        with open(p_rt, "w", encoding="utf-8") as f:
+            f.write(rt)
+        print("patch_pathmap3: wrappedlibrt 改 GOM(2处)")
+    else:
+        print("patch_pathmap3: wrappedlibrt 已应用，跳过")
+
     # --- job4: library.c resolve 观测（临时调试，定位后撤）---
     p_libr = os.path.join(srcdir, "src", "librarian", "library.c")
     with open(p_libr, "r", encoding="utf-8") as f:
